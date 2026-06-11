@@ -103,7 +103,7 @@ export function diffSchemas(
   rows2: SchemaRow[],
   label1: string,
   label2: string
-): Omit<SchemaCompareResult, 'label1' | 'label2'> {
+): Omit<SchemaCompareResult, 'label1' | 'label2' | 'schema1'> {
   const key   = (r: SchemaRow) => `${r.table_name}::${r.column_name}`
   const map1  = new Map(rows1.map(r => [key(r), r]))
   const map2  = new Map(rows2.map(r => [key(r), r]))

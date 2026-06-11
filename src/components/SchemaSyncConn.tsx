@@ -87,8 +87,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
     }
   }
 
-  const tableSql       = result && selectedTable ? generateTableSQL(result, selectedTable) : ''
-  const selectedStatus = result?.tableSummary.find(t => t.table_name === selectedTable)?.status ?? ''
+  const tableSql     = result && selectedTable ? generateTableSQL(result, selectedTable) : ''
   const statusCounts   = result ? result.tableSummary.reduce<Record<string, number>>((acc, r) => {
     acc[r.status] = (acc[r.status] ?? 0) + 1
     return acc
@@ -213,10 +212,6 @@ function TableSummarySection({
 
   if (rows.length === 0) return null
 
-  const statusCounts = rows.reduce<Record<string, number>>((acc, r) => {
-    acc[r.status] = (acc[r.status] ?? 0) + 1
-    return acc
-  }, {})
   const isAll        = selectedStatuses.size === 0
   const filteredRows = isAll ? rows : rows.filter(r => selectedStatuses.has(r.status))
 

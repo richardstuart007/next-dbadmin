@@ -1,0 +1,30 @@
+{
+  "name": "next-dbadmin",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "dev": "next dev --turbopack --port 3005"
+  },
+  "dependencies": {
+    "@heroicons/react": "^2.1.5",
+    "@neondatabase/serverless": "^1.1.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "20.5.7",
+    "next": "^16.2.4",
+    "nextjs-shared": "github:richardstuart007/nextjs-shared",
+    "pg": "^8.20.0",
+    "postcss": "8.4.31",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tailwindcss": "^4",
+    "typescript": "5.2.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3"
+  }
+}

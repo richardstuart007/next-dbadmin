@@ -81,6 +81,49 @@ function parsePgDumpByTable(raw: string): TableDDL[] {
 }
 
 //----------------------------------------------------------------------------------
+//  fetchTableSequencesFromUrl — get next sequence value per table for given tables
+//  Returns table_name → next value. Tables with no sequence are omitted. Returns {} on error.
+//----------------------------------------------------------------------------------
+export async function fetchTableSequencesFromUrl(url: string, tables: string[]): Promise<Record<string, number | null>> {
+  if (tables.length === 0) return {}
+  if (!url) return {}
+  const db = createArbitraryDb(url)
+  try {
+    const result = await db.query({
+      query: `
+        SELECT
+          cls.relname AS table_name,
+          CASE
+            WHEN s.last_value IS NOT NULL THEN s.last_value + s.increment_by
+            ELSE s.start_value
+          END AS next_value
+        FROM pg_class cls
+        JOIN pg_namespace ns   ON ns.oid = cls.relnamespace
+        JOIN pg_attribute attr ON attr.attrelid = cls.oid
+                               AND attr.attnum > 0 AND NOT attr.attisdropped
+        JOIN pg_depend dep     ON dep.refobjid = cls.oid
+                               AND dep.refobjsubid = attr.attnum
+                               AND dep.classid = 'pg_class'::regclass
+                               AND dep.deptype IN ('a', 'i')
+        JOIN pg_class seq_cls  ON seq_cls.oid = dep.objid AND seq_cls.relkind = 'S'
+        JOIN pg_sequences s    ON s.sequencename = seq_cls.relname
+                               AND s.schemaname = ns.nspname
+        WHERE ns.nspname = 'public'
+          AND cls.relkind = 'r'
+          AND cls.relname = ANY($1::text[])
+      `,
+      params: [tables],
+    })
+    const seqs: Record<string, number | null> = {}
+    for (const row of result.rows) seqs[row.table_name] = parseInt(row.next_value, 10)
+    const result2 = seqs
+    return result2
+  } catch {
+    return {}
+  }
+}
+
+//----------------------------------------------------------------------------------
 //  fetchTableCountsFromUrl — count rows for given tables in a database via URL
 //  Uses createArbitraryDb so no env file is needed — URL is passed directly.
 //  Tables that do not exist are omitted from the result. Returns {} on any error.
@@ -149,6 +192,10 @@ export async function generateCreateSQLFromUrl(url: string): Promise<TableDDL[]>
     throw new Error(`pg_dump failed: ${(e as Error).message}`)
   }
   if (!raw.trim()) throw new Error('pg_dump returned empty output')
+  //
+  //  pg_dump on local PostgreSQL emits \unrestrict lines that confuse the parser — strip them
+  //
+  raw = raw.split('\n').filter(line => !line.startsWith('\\unrestrict ')).join('\n')
   const result = parsePgDumpByTable(raw)
   if (result.length === 0) {
     throw new Error(

@@ -1,4 +1,4 @@
-# Plan — next-dbadmin, "version": "1.0.1"
+# Plan — next-dbadmin, "version": "1.0.2"
 
 ## Current task
 _No active task._

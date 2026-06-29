@@ -4,6 +4,8 @@ import { execSync, spawnSync, ExecSyncOptions } from 'child_process'
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { compareSchemasFromUrls, fetchTableCountsFromUrl, fetchTableSequencesFromUrl } from '@/src/actions/schemaSyncActions'
+import type { TableStatus } from '@/src/actions/schemaUtils'
 
 const PG_BIN_PATHS = [
   'C:\\Program Files\\PostgreSQL\\18\\bin',
@@ -44,6 +46,15 @@ export type CopyResult = {
 export type BackupResult = {
   conflicts: string[]
   logs: CopyLog[]
+}
+
+export type TableComparisonRow = {
+  table:         string
+  status:        TableStatus
+  sourceCount:   number | null
+  targetCount:   number | null
+  sourceNextSeq: number | null
+  targetNextSeq: number | null
 }
 
 //----------------------------------------------------------------------------------
@@ -128,6 +139,36 @@ export async function get_tables({
 }
 
 //----------------------------------------------------------------------------------
+//  repair_sequences — reset every sequence column to MAX(col) so inserts don't collide
+//  Searches all columns (not just attnum=1) so tables where the PK is not the first
+//  column are handled correctly. Logs an error entry if repair fails.
+//----------------------------------------------------------------------------------
+async function repair_sequences(cleanTargetUrl: string, table: string): Promise<CopyLog[]> {
+  const logs: CopyLog[] = []
+  try {
+    const { stdout } = spawnPg([
+      cleanTargetUrl, '-t', '-c',
+      `SELECT attname FROM pg_attribute JOIN pg_class ON pg_class.oid = pg_attribute.attrelid WHERE relname = '${table}' AND attnum > 0 AND NOT attisdropped AND pg_get_serial_sequence('public.${table}', attname) IS NOT NULL ORDER BY attnum LIMIT 1`
+    ])
+    const colName = stdout.trim()
+    if (!colName) return logs
+
+    const { stderr } = spawnPg([
+      cleanTargetUrl, '-c',
+      `SELECT setval(pg_get_serial_sequence('public.${table}', '${colName}'), GREATEST(COALESCE(MAX("${colName}"), 0), 1), COALESCE(MAX("${colName}"), 0) > 0) FROM public."${table}"`
+    ])
+    if (stderr && /error/i.test(stderr)) {
+      logs.push({ event: 'ERROR', detail: `${table} — sequence repair failed: ${stderr.trim()}` })
+    } else {
+      logs.push({ event: 'SEQUENCE', detail: `${table} — sequence repaired` })
+    }
+  } catch (error) {
+    logs.push({ event: 'ERROR', detail: `${table} — sequence repair exception: ${(error as Error).message}` })
+  }
+  return logs
+}
+
+//----------------------------------------------------------------------------------
 //  copy_tables — copy selected tables from source to target using pg_dump/psql
 //  Repairs sequences after each table. Skips tables with existing rows in target.
 //----------------------------------------------------------------------------------
@@ -205,41 +246,9 @@ export async function copy_tables({
         if (log.event === 'ERROR') hasError = true
       }
 
-      const seqFile = join(tmpdir(), `seq_${table}_${Date.now()}.sql`)
-      try {
-        const seqSql = `DO $$
-DECLARE
-  r RECORD;
-  v BIGINT;
-BEGIN
-  FOR r IN
-    SELECT t.relname, a.attname,
-           pg_get_serial_sequence('public.'||t.relname, a.attname) AS seq
-    FROM pg_class t
-    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0
-    JOIN pg_namespace n ON n.oid = t.relnamespace
-    WHERE n.nspname = 'public'
-      AND t.relname = '${table}'
-      AND pg_get_serial_sequence('public.'||t.relname, a.attname) IS NOT NULL
-  LOOP
-    EXECUTE format('SELECT COALESCE(MAX(%I),0) FROM %I', r.attname, r.relname) INTO v;
-    PERFORM setval(r.seq, GREATEST(v, 1), v > 0);
-    RAISE NOTICE 'SEQFIX:%:%', r.relname, v;
-  END LOOP;
-END $$;
-`
-        writeFileSync(seqFile, seqSql, 'utf8')
-        const { stderr } = spawnPg([cleanTarget, '-f', seqFile])
-        for (const line of stderr.split('\n')) {
-          const match = line.match(/SEQFIX:([^:]+):(\d+)/)
-          if (match) {
-            allLogs.push({ event: 'SEQUENCE', detail: `${match[1]} — repaired to ${match[2]}` })
-          }
-        }
-      } catch {
-        // sequence repair is best-effort
-      } finally {
-        if (existsSync(seqFile)) unlinkSync(seqFile)
+      const seqLogs = await repair_sequences(cleanTarget, table)
+      for (const log of seqLogs) {
+        allLogs.push(log)
       }
 
       void sourceLabel
@@ -293,4 +302,81 @@ export async function backup_tables({
   }
 
   return { conflicts: [], logs }
+}
+
+//----------------------------------------------------------------------------------
+//  compare_tables — compare tables between source and target by schema then row count
+//  Status mirrors schema sync: identical/different/only_in_source/only_in_target.
+//----------------------------------------------------------------------------------
+export async function compare_tables({
+  sourceUrl,
+  targetUrl,
+}: {
+  sourceUrl: string
+  targetUrl: string
+  caller?:   string
+}): Promise<TableComparisonRow[]> {
+  const schemaResult = await compareSchemasFromUrls({
+    url1:   sourceUrl,
+    url2:   targetUrl,
+    label1: '',
+    label2: '',
+  })
+
+  const allTables = schemaResult.tableSummary.map(t => t.table_name)
+
+  const [sourceCounts, targetCounts, sourceSeqs, targetSeqs] = await Promise.all([
+    fetchTableCountsFromUrl(sourceUrl, allTables),
+    fetchTableCountsFromUrl(targetUrl, allTables),
+    fetchTableSequencesFromUrl(sourceUrl, allTables),
+    fetchTableSequencesFromUrl(targetUrl, allTables),
+  ])
+
+  return schemaResult.tableSummary.map(t => ({
+    table:         t.table_name,
+    status:        t.status,
+    sourceCount:   t.status !== 'only_in_target' ? (sourceCounts[t.table_name] ?? null) : null,
+    targetCount:   t.status !== 'only_in_source' ? (targetCounts[t.table_name] ?? null) : null,
+    sourceNextSeq: t.status !== 'only_in_target' ? (sourceSeqs[t.table_name] ?? null) : null,
+    targetNextSeq: t.status !== 'only_in_source' ? (targetSeqs[t.table_name] ?? null) : null,
+  }))
+}
+
+//----------------------------------------------------------------------------------
+//  truncate_table — remove all rows from a table in the target database
+//----------------------------------------------------------------------------------
+export async function truncate_table({
+  targetUrl,
+  table,
+}: {
+  targetUrl: string
+  table:     string
+  caller?:   string
+}): Promise<{ success: boolean; message: string }> {
+  const cleanTarget = stripUnsupportedParams(targetUrl)
+  const { stderr } = spawnPg([cleanTarget, '-c', `TRUNCATE TABLE "${table}"`])
+  if (stderr && /error/i.test(stderr)) {
+    return { success: false, message: stderr.trim() }
+  }
+  await repair_sequences(cleanTarget, table)
+  return { success: true, message: `${table} truncated and sequence reset` }
+}
+
+//----------------------------------------------------------------------------------
+//  drop_table — permanently delete a table from the target database
+//----------------------------------------------------------------------------------
+export async function drop_table({
+  targetUrl,
+  table,
+}: {
+  targetUrl: string
+  table:     string
+  caller?:   string
+}): Promise<{ success: boolean; message: string }> {
+  const cleanTarget = stripUnsupportedParams(targetUrl)
+  const { stderr } = spawnPg([cleanTarget, '-c', `DROP TABLE "${table}"`])
+  if (stderr && /error/i.test(stderr)) {
+    return { success: false, message: stderr.trim() }
+  }
+  return { success: true, message: `${table} dropped` }
 }

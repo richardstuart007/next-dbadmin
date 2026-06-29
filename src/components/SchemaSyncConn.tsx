@@ -48,8 +48,29 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
 
   const sourceConn  = connections.find(c => c.key === sourceKey)
   const targetConn  = connections.find(c => c.key === targetKey)
-  const sameConn    = sourceKey && targetKey && sourceKey === targetKey
+  const sameUrl     = !!(sourceConn?.url && targetConn?.url && sourceConn.url === targetConn.url)
   const diffProject = sourceConn && targetConn && sourceConn.projectKey !== targetConn.projectKey
+
+  //----------------------------------------------------------------------------------------------
+  //  handleSourceChange — when source project changes, syncs target to same project+env
+  //----------------------------------------------------------------------------------------------
+  function handleSourceChange(key: string) {
+    const newConn = connections.find(c => c.key === key)
+    const oldConn = connections.find(c => c.key === sourceKey)
+    if (newConn && oldConn && newConn.projectKey !== oldConn.projectKey) {
+      //
+      //  Project changed — keep env if new project has it, otherwise use first env
+      //
+      const targetEnv   = targetKey.split('.')[1] ?? ''
+      const sameEnv     = connections.find(c => c.projectKey === newConn.projectKey && c.key.split('.')[1] === targetEnv)
+      const firstForNew = connections.find(c => c.projectKey === newConn.projectKey)
+      const newTarget   = sameEnv ?? firstForNew
+      if (newTarget) setTargetKey(newTarget.key)
+    }
+    setSourceKey(key)
+    setResult(null)
+    setMessage('')
+  }
 
   //----------------------------------------------------------------------------------------------
   //  handleCompare — calls compareSchemasFromUrls then fetches row counts
@@ -80,8 +101,8 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
       ])
       setSourceCounts(sc)
       setTargetCounts(tc)
-    } catch (error) {
-      setMessage(`Error: ${(error as Error).message}`)
+    } catch {
+      setMessage('URL to database is invalid')
     } finally {
       setRunning(false)
     }
@@ -104,7 +125,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
           label='Source'
           connections={connections}
           value={sourceKey}
-          onChange={v => { setSourceKey(v); setResult(null); setMessage('') }}
+          onChange={handleSourceChange}
         />
         <ConnectionPicker
           label='Target'
@@ -131,8 +152,8 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
       </div>
 
       <div className='ml-20'>
-        {sameConn ? (
-          <p className='text-xs font-bold text-red-700'>⚠ Source and target are the same — cannot compare</p>
+        {sameUrl ? (
+          <p className='text-xs font-bold text-red-700'>Same URL for Source and Target</p>
         ) : (
           <MyButton onClick={handleCompare} overrideClass='h-6 px-2 py-2' disabled={!sourceKey || !targetKey || running}>
             Compare Schemas
@@ -176,7 +197,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
 //----------------------------------------------------------------------------------------------
 //  statusMeta — maps TableStatus to display label and colour class
 //----------------------------------------------------------------------------------------------
-function statusMeta(status: string) {
+export function statusMeta(status: string) {
   switch (status) {
     case 'identical':      return { label: 'Identical',  className: 'bg-green-100 text-green-800' }
     case 'different':      return { label: 'Different',  className: 'bg-yellow-100 text-yellow-800' }
@@ -186,11 +207,11 @@ function statusMeta(status: string) {
   }
 }
 
-const STATUS_FILTER_OPTIONS = [
-  { value: 'identical',      label: 'Identical' },
-  { value: 'different',      label: 'Different' },
-  { value: 'only_in_source', label: 'Source' },
-  { value: 'only_in_target', label: 'Target' },
+export const STATUS_FILTER_OPTIONS = [
+  { value: 'identical'      as const, label: 'Identical' },
+  { value: 'different'      as const, label: 'Different' },
+  { value: 'only_in_source' as const, label: 'Source' },
+  { value: 'only_in_target' as const, label: 'Target' },
 ]
 
 //----------------------------------------------------------------------------------------------

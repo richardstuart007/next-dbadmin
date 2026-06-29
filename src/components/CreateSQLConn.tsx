@@ -88,6 +88,14 @@ export default function CreateSQLConn({ connections }: { connections: Connection
       {tableDDLs.length > 0 && (
         <div className='flex gap-2 border rounded bg-white' style={{ minHeight: '300px' }}>
           <div className='w-48 shrink-0 border-r overflow-y-auto'>
+            <button
+              onClick={() => setSelectedTable('__all__')}
+              className={`w-full text-left px-2 py-1 text-xs font-semibold truncate border-b border-gray-200 hover:bg-blue-50 ${
+                selectedTable === '__all__' ? 'bg-blue-100 text-blue-800' : 'text-gray-500'
+              }`}
+            >
+              All Tables
+            </button>
             {tableDDLs.map(t => (
               <button
                 key={t.table_name}
@@ -103,7 +111,9 @@ export default function CreateSQLConn({ connections }: { connections: Connection
           <div className='flex-1 p-2 overflow-auto'>
             {selectedTable && (
               <pre className='text-xs font-mono whitespace-pre-wrap text-gray-800'>
-                {tableDDLs.find(t => t.table_name === selectedTable)?.sql ?? ''}
+                {selectedTable === '__all__'
+                  ? tableDDLs.map(t => `-- ${t.table_name}\n${t.sql}`).join('\n\n')
+                  : tableDDLs.find(t => t.table_name === selectedTable)?.sql ?? ''}
               </pre>
             )}
           </div>

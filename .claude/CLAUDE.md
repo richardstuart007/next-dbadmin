@@ -40,6 +40,10 @@ Flat list of named connections — one entry per database environment:
 - `src/app/api/copy/route.ts` — POST SSE route: accepts { sourceUrl, targetUrl, tables }
 - `src/app/api/schema-compare/route.ts` — GET route: accepts url1, url2 query params
 
+## nextjs-shared suitability
+
+SQL utility functions in this project accept a `url` parameter to connect to arbitrary databases. This makes them **ineligible for `nextjs-shared`** — shared database functions use the project's configured connection, not a caller-supplied URL. Never propose moving a URL-accepting database function to `nextjs-shared`.
+
 ## Key conventions
 
 - Always use `function` declarations, never arrow functions for named functions
@@ -47,3 +51,8 @@ Flat list of named connections — one entry per database environment:
 - Never use `require()` — ES module imports only
 - POSTGRES_URL in `.env` is optional (used only for write_Logging; failures are silent)
 - Do not add the `xlg_logging` table unless you have a local database to point to
+
+## Silent file updates — never ask permission
+
+**PLAN.md and CHANGES.md are always updated silently.**  
+Never ask before checking off a step in `.claude/PLAN.md` or appending to `.claude/CHANGES.md`. These are mechanical parts of execution — no confirmation needed.

@@ -10,10 +10,10 @@ import type { ConnectionEntry } from '@/src/types/connections'
 type Tab = 'backup' | 'copy' | 'schema' | 'createsql'
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'backup',    label: 'Backup' },
-  { id: 'copy',      label: 'Copy Tables' },
-  { id: 'schema',    label: 'Schema Sync' },
   { id: 'createsql', label: 'Create SQL' },
+  { id: 'schema',    label: 'Schema Sync' },
+  { id: 'copy',      label: 'Copy Tables' },
+  { id: 'backup',    label: 'Backup' },
 ]
 
 //----------------------------------------------------------------------------------------------
@@ -21,7 +21,7 @@ const TABS: { id: Tab; label: string }[] = [
 //  Receives flattened ConnectionEntry[] from the server page (read from connections.json).
 //----------------------------------------------------------------------------------------------
 export default function DatabaseToolsConn({ connections }: { connections: ConnectionEntry[] }) {
-  const [activeTab, setActiveTab] = useState<Tab>('backup')
+  const [activeTab, setActiveTab] = useState<Tab>('createsql')
 
   if (connections.length === 0) {
     return (

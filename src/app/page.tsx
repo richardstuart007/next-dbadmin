@@ -14,6 +14,7 @@ export default function Page() {
     const file = JSON.parse(raw) as ConnectionsFile
     for (const [project, envs] of Object.entries(file)) {
       for (const [env, conn] of Object.entries(envs)) {
+        if (!conn.url) continue
         connections.push({
           key:        `${project}.${env}`,
           projectKey: project,

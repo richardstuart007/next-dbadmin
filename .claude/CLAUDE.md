@@ -33,7 +33,7 @@ Flat list of named connections — one entry per database environment:
 - `src/app/page.tsx` — server component: reads connections.json, passes ConnectionEntry[] to DatabaseToolsConn
 - `src/components/DatabaseToolsConn.tsx` — tab container (Copy Tables / Schema Sync)
 - `src/components/CopyTableConn.tsx` — table copy UI; calls server actions from nextjs-shared/copyTables
-- `src/components/SchemaSyncConn.tsx` — schema compare UI; calls compareSchemasFromUrls from nextjs-shared/schemaSync
+- `src/components/SchemaSyncConn.tsx` — schema compare UI; calls compareDDLsFromUrls (pg_dump --schema-only per table)
 - `src/components/ConnectionPicker.tsx` — dropdown for selecting a database connection
 - `src/actions/schemaSyncActions.ts` — fetchTableCountsFromUrl server action (URL-based row counts)
 - `src/types/connections.ts` — ConnectionEntry, Connection, ConnectionsFile types
@@ -43,6 +43,10 @@ Flat list of named connections — one entry per database environment:
 ## nextjs-shared suitability
 
 SQL utility functions in this project accept a `url` parameter to connect to arbitrary databases. This makes them **ineligible for `nextjs-shared`** — shared database functions use the project's configured connection, not a caller-supplied URL. Never propose moving a URL-accepting database function to `nextjs-shared`.
+
+## Schema file
+
+`scripts/schema.sql` is the single source of truth for the database structure. Every new table and index must be added here.
 
 ## Key conventions
 

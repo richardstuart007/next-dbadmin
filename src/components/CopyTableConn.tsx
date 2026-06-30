@@ -13,6 +13,7 @@ import {
   backup_tables,
   truncate_table,
   drop_table,
+  repair_sequence,
 } from '@/src/actions/copyTablesActions'
 import type { CopyLog, TableComparisonRow } from '@/src/actions/copyTablesActions'
 import type { TableStatus } from '@/src/actions/schemaUtils'
@@ -287,6 +288,23 @@ export default function CopyTableConn({ connections }: { connections: Connection
   }
 
   //----------------------------------------------------------------------------------------------
+  //  handleFixSeq — resets a table's sequence to MAX(pk) in the given database
+  //----------------------------------------------------------------------------------------------
+  async function handleFixSeq(url: string, table: string) {
+    setRunning(true)
+    setMessage(`Repairing sequence for ${table}...`)
+    try {
+      const result = await repair_sequence({ targetUrl: url, table, caller: 'CopyTableConn' })
+      setMessage(result.success ? `${table} — sequence repaired` : `Sequence repair failed: ${result.message}`)
+      await handleRefresh()
+    } catch (error) {
+      setMessage(`Error: ${(error as Error).message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  //----------------------------------------------------------------------------------------------
   //  handleBackup — calls backup_tables server action for selected tables in target
   //----------------------------------------------------------------------------------------------
   async function handleBackup() {
@@ -482,9 +500,11 @@ export default function CopyTableConn({ connections }: { connections: Connection
               </thead>
               <tbody>
                 {filteredRows.map(r => {
-                  const isTargetOnly = r.status === 'only_in_target'
-                  const bothExist    = r.sourceCount !== null && r.targetCount !== null
-                  const countsMatch  = bothExist && r.sourceCount === r.targetCount
+                  const isTargetOnly  = r.status === 'only_in_target'
+                  const bothExist     = r.sourceCount !== null && r.targetCount !== null
+                  const countsMatch   = bothExist && r.sourceCount === r.targetCount
+                  const sourceSeqBad  = r.sourceNextSeq !== null && r.sourceMaxId !== null && r.sourceNextSeq <= r.sourceMaxId
+                  const targetSeqBad  = r.targetNextSeq !== null && r.targetMaxId !== null && r.targetNextSeq <= r.targetMaxId
                   return (
                     <tr key={r.table} className='border-b border-gray-100'>
                       <td className='px-2 py-1 text-center'>
@@ -507,14 +527,38 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
                         {r.sourceCount !== null ? r.sourceCount.toLocaleString() : '—'}
                       </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
-                        {r.sourceNextSeq !== null ? r.sourceNextSeq.toLocaleString() : '—'}
+                      <td className={`px-2 py-1 text-right tabular-nums ${sourceSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
+                        <div className='flex items-center justify-end gap-1'>
+                          {sourceSeqBad && <span title={`Sequence (${r.sourceNextSeq?.toLocaleString()}) ≤ max id (${r.sourceMaxId?.toLocaleString()})`}>⚠</span>}
+                          {r.sourceNextSeq !== null ? r.sourceNextSeq.toLocaleString() : '—'}
+                          {sourceSeqBad && sourceConn?.url && (
+                            <MyButton
+                              onClick={() => handleFixSeq(sourceConn.url!, r.table)}
+                              overrideClass='h-4 px-1 py-0 text-xs bg-red-500 hover:bg-red-600 shrink-0'
+                              disabled={running}
+                            >
+                              Fix
+                            </MyButton>
+                          )}
+                        </div>
                       </td>
                       <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
                         {r.targetCount !== null ? r.targetCount.toLocaleString() : '—'}
                       </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
-                        {r.targetNextSeq !== null ? r.targetNextSeq.toLocaleString() : '—'}
+                      <td className={`px-2 py-1 text-right tabular-nums ${targetSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
+                        <div className='flex items-center justify-end gap-1'>
+                          {targetSeqBad && <span title={`Sequence (${r.targetNextSeq?.toLocaleString()}) ≤ max id (${r.targetMaxId?.toLocaleString()})`}>⚠</span>}
+                          {r.targetNextSeq !== null ? r.targetNextSeq.toLocaleString() : '—'}
+                          {targetSeqBad && targetConn?.url && (
+                            <MyButton
+                              onClick={() => handleFixSeq(targetConn.url!, r.table)}
+                              overrideClass='h-4 px-1 py-0 text-xs bg-red-500 hover:bg-red-600 shrink-0'
+                              disabled={running}
+                            >
+                              Fix
+                            </MyButton>
+                          )}
+                        </div>
                       </td>
                       <td className='px-2 py-1'>
                         {bothExist && (

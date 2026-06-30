@@ -4,7 +4,7 @@ import { execSync, spawnSync, ExecSyncOptions } from 'child_process'
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { compareSchemasFromUrls, fetchTableCountsFromUrl, fetchTableSequencesFromUrl } from '@/src/actions/schemaSyncActions'
+import { compareSchemasFromUrls, fetchTableCountsFromUrl, fetchTableSequencesFromUrl, fetchTableMaxIdsFromUrl } from '@/src/actions/schemaSyncActions'
 import type { TableStatus } from '@/src/actions/schemaUtils'
 
 const PG_BIN_PATHS = [
@@ -55,6 +55,8 @@ export type TableComparisonRow = {
   targetCount:   number | null
   sourceNextSeq: number | null
   targetNextSeq: number | null
+  sourceMaxId:   number | null
+  targetMaxId:   number | null
 }
 
 //----------------------------------------------------------------------------------
@@ -166,6 +168,24 @@ async function repair_sequences(cleanTargetUrl: string, table: string): Promise<
     logs.push({ event: 'ERROR', detail: `${table} — sequence repair exception: ${(error as Error).message}` })
   }
   return logs
+}
+
+//----------------------------------------------------------------------------------
+//  repair_sequence — public server action: reset a table's sequence to MAX(pk)
+//----------------------------------------------------------------------------------
+export async function repair_sequence({
+  targetUrl,
+  table,
+}: {
+  targetUrl: string
+  table:     string
+  caller?:   string
+}): Promise<{ success: boolean; message: string }> {
+  const cleanTarget = stripUnsupportedParams(targetUrl)
+  const logs = await repair_sequences(cleanTarget, table)
+  const hasError = logs.some(l => l.event === 'ERROR')
+  const detail   = logs[0]?.detail ?? `${table} — no sequence found`
+  return { success: !hasError, message: detail }
 }
 
 //----------------------------------------------------------------------------------
@@ -325,11 +345,13 @@ export async function compare_tables({
 
   const allTables = schemaResult.tableSummary.map(t => t.table_name)
 
-  const [sourceCounts, targetCounts, sourceSeqs, targetSeqs] = await Promise.all([
+  const [sourceCounts, targetCounts, sourceSeqs, targetSeqs, sourceMaxIds, targetMaxIds] = await Promise.all([
     fetchTableCountsFromUrl(sourceUrl, allTables),
     fetchTableCountsFromUrl(targetUrl, allTables),
     fetchTableSequencesFromUrl(sourceUrl, allTables),
     fetchTableSequencesFromUrl(targetUrl, allTables),
+    fetchTableMaxIdsFromUrl(sourceUrl, allTables),
+    fetchTableMaxIdsFromUrl(targetUrl, allTables),
   ])
 
   return schemaResult.tableSummary.map(t => ({
@@ -339,6 +361,8 @@ export async function compare_tables({
     targetCount:   t.status !== 'only_in_source' ? (targetCounts[t.table_name] ?? null) : null,
     sourceNextSeq: t.status !== 'only_in_target' ? (sourceSeqs[t.table_name] ?? null) : null,
     targetNextSeq: t.status !== 'only_in_source' ? (targetSeqs[t.table_name] ?? null) : null,
+    sourceMaxId:   t.status !== 'only_in_target' ? (sourceMaxIds[t.table_name] ?? null) : null,
+    targetMaxId:   t.status !== 'only_in_source' ? (targetMaxIds[t.table_name] ?? null) : null,
   }))
 }
 
@@ -354,11 +378,10 @@ export async function truncate_table({
   caller?:   string
 }): Promise<{ success: boolean; message: string }> {
   const cleanTarget = stripUnsupportedParams(targetUrl)
-  const { stderr } = spawnPg([cleanTarget, '-c', `TRUNCATE TABLE "${table}"`])
+  const { stderr } = spawnPg([cleanTarget, '-c', `TRUNCATE TABLE "${table}" RESTART IDENTITY`])
   if (stderr && /error/i.test(stderr)) {
     return { success: false, message: stderr.trim() }
   }
-  await repair_sequences(cleanTarget, table)
   return { success: true, message: `${table} truncated and sequence reset` }
 }
 

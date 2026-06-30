@@ -1,59 +1,95 @@
-# Changes — next-dbadmin, "version": "1.0.2"
+# Changes — next-dbadmin, "version": "1.0.3"
 
 ## src/actions/copyTablesActions.ts
-- Added `TableStatus` and `TableComparisonRow` types
-- Added `compare_tables` — fetches tables from both source and target, gets row counts for each, returns sorted union with status (`in_sync`, `different`, `source_only`, `target_only`)
-- Added `truncate_table` — TRUNCATE TABLE on target database
-- Added `drop_table` — DROP TABLE on target database
+- `truncate_table`: replaced plain `TRUNCATE TABLE` + `repair_sequences()` with `TRUNCATE TABLE ... RESTART IDENTITY` — single atomic statement, same outcome, no separate sequence-repair query needed
 
-## src/components/SchemaSyncConn.tsx
-- Added `handleSourceChange`: same project-sync logic as CopyTableConn — when source project changes, target project follows while keeping target environment (falls back to first env if exact match not found)
-- Replaced inline arrow on Source ConnectionPicker onChange with `handleSourceChange`
-
-## src/components/CopyTableConn.tsx
-- `handleSourceChange`: when source project changes, target project automatically follows (same environment kept); falls back to first env for new project if exact env doesn't exist
-- `TableStatus` re-exported from `schemaUtils.ts` — now uses identical schema sync values: `identical` / `different` / `only_in_source` / `only_in_target`
-- `compare_tables` now calls `compareSchemasFromUrls` (schema comparison) then `fetchTableCountsFromUrl` × 2 in parallel — Status reflects schema parity, Counts reflects row count parity independently
-- Removed duplicate `STATUS_LABEL`, `STATUS_COLOUR`, `STATUS_FILTER_OPTIONS` constants — now imports and uses shared `statusMeta` and `STATUS_FILTER_OPTIONS` from `SchemaSyncConn.tsx`
-
-## src/components/SchemaSyncConn.tsx
-- Exported `statusMeta` and `STATUS_FILTER_OPTIONS` so they can be shared with CopyTableConn
-- Full redesign: replaced flat checkbox list with a comparison table matching SchemaSyncConn layout
-- Columns: checkbox | Table | Status ▾ (filterable) | [Source label] | [Target label] | Counts | Actions
-- Status badges: In Sync (green) / Different (yellow) / Source Only (blue) / Target Only (orange)
-- Per-row Truncate (amber) and Drop (red) buttons on target tables; both fire confirm dialogs
-- Summary badge row above table showing counts per status
-- Bulk action bar (Copy N Tables + Backup N) appears only when rows are selected
-- `target_only` rows have no checkbox — cannot be selected for copy (directional: source→target only)
-- After Truncate / Drop / Copy, comparison table refreshes automatically via `handleRefresh`
-- Status filter uses `<details>/<summary>` pattern (same as SchemaSyncConn)
-
-## src/actions/copyTablesActions.ts
-- Extracted sequence-repair logic into shared `repair_sequences(cleanTargetUrl, table)` helper; called by both `copy_tables` and `truncate_table`
-- `repair_sequences` replaces the PL/pgSQL DO block with two plain `spawnPg` calls: first looks up the first serial column (attnum=1) from pg_attribute, second calls setval to MAX (or 1 if empty); no temp file, no loop
-- `truncate_table` calls `repair_sequences` after TRUNCATE — table is empty so MAX=0, GREATEST(0,1)=1 → sequence resets to 1; return message updated to "truncated and sequence reset"
+## src/actions/schemaUtils.ts
+- Added `DDLComparisonRow` type: `{ table_name, status, sourceDDL, targetDDL }`
+- Added `DDLCompareResult` type: `{ label1, label2, rows: DDLComparisonRow[] }`
 
 ## src/actions/schemaSyncActions.ts
-- Added `fetchTableSequencesFromUrl(url, tables)` — queries `pg_sequences` via `pg_get_serial_sequence` to compute the next sequence value per table; returns `Record<string, number | null>`
-- Fixed `fetchTableSequencesFromUrl`: query referenced `s.is_called` which does not exist in the `pg_sequences` view; replaced with `s.last_value IS NOT NULL` (equivalent: `last_value` is NULL in `pg_sequences` when the sequence has never been called)
-- Replaced `fetchTableSequencesFromUrl` query with a `pg_depend`-based approach that finds sequences by ownership rather than by `column_default` or `is_identity`; covers `SERIAL` (deptype='a'), `IDENTITY` (deptype='i'), and any other sequence ownership regardless of how the column was created
+- Added `compareDDLsFromUrls`: runs `generateCreateSQLFromUrl` against both databases in parallel, normalises DDL (trim + collapse blank lines), compares per table → identical / different / only_in_source / only_in_target
 
-## src/actions/copyTablesActions.ts
-- Added `sourceNextSeq` and `targetNextSeq` to `TableComparisonRow`
-- `compare_tables` now fetches sequences for both source and target in parallel alongside row counts
-- Fixed `repair_sequences` bug: `attnum = 1` only checked the first column — changed to `attnum > 0 AND NOT attisdropped ORDER BY attnum LIMIT 1` so tables where the PK is not column 1 are handled correctly
-- Added `public.` schema prefix to `pg_get_serial_sequence` and `FROM` clause in `repair_sequences`
-- `repair_sequences` now logs an ERROR entry on failure instead of silently swallowing exceptions
+## src/components/SchemaSyncConn.tsx
+- Replaced `information_schema`-based column comparison with full DDL comparison via `compareDDLsFromUrls`
+- On table click: shows DDL panel adapting to status — identical (grey), source-only (blue, "run this"), target-only (orange, "orphan"), different (side-by-side blue/orange with source as reference)
+- Row counts retained alongside DDL comparison
 
-## src/components/CopyTableConn.tsx
-- Added "Src Seq" and "Tgt Seq" columns showing next sequence value for source and target (or `—` if no sequence)
+## src/lib/schemaPaths.ts (new)
+- `schemaFilePath(projectKey)` — resolves `C:\Users\richa\github\<projectKey>\scripts\schema.sql`
+
+## src/actions/schemaSyncActions.ts
+- Added `fs/promises` and `schemaFilePath` imports
+- Extracted `diffDDLMaps(srcMap, tgtMap, label1, label2)` pure function — shared by both comparison modes
+- Refactored `compareDDLsFromUrls` to call `diffDDLMaps` (no behaviour change)
+- Added `readSchemaFile(projectKey)` private helper — reads and parses `scripts/schema.sql`
+- Added `regenerateSchemaFile(url, projectKey)` — writes pg_dump output to `scripts/schema.sql`
+- Added `compareDDLWithFile({ url, projectKey, label1, excludePrefixes })` — DB vs schema.sql comparison, returns `DDLCompareResult & { fileExists: boolean }`
+
+## src/components/SchemaSyncConn.tsx
+- Added `compareMode: 'db' | 'file'` toggle (radio buttons) between Target DB and Schema file modes
+- File mode: compares live DB against `scripts/schema.sql`; Regenerate button writes pg_dump output to file
+- File mode hides Target DB picker and row count columns
+- Added `lineDiff(src, tgt)` — LCS-based line diff returning `srcLines`/`tgtLines` with `'same'|'src'|'tgt'` kind
+- Added `DiffPreBlock` — renders diff lines with per-line highlight for changed lines
+- "Different" DDLPanel now shows side-by-side line-level diff: blue highlights in source panel, orange in target panel
+
+## scripts/schema.sql (cross-project)
+- Moved `schema.sql` from `lib/` → `scripts/` in infostore, next-bridge, next-chess-analysis, next-bridgeschool, nextjs-shared
+- Moved `schema.sql` from `src/` → `scripts/` in next-bridgeschool and nextjs-shared
+- Added `## Schema file` section to all seven project CLAUDE.md files (including next-dbadmin, next-bridge, nextjs-chess)
+- Updated next-dbadmin CLAUDE.md: SchemaSyncConn description, added Schema file section
+- Updated next-chess-analysis CHANGES.md: old `lib/schema.sql` heading corrected to `scripts/schema.sql`
+
+## src/actions/schemaSyncActions.ts
+- `parsePgDumpByTable`: strip trailing comment-only and blank lines from each block's SQL so the pg_dump footer (`-- PostgreSQL database dump complete --`) no longer leaks into the last table's DDL
+- `regenerateSchemaFile`: write each table with a `-- Name: <table>; Type: TABLE;` header so `parsePgDumpByTable` can re-parse the file on subsequent compare runs
+
+## src/components/SchemaSyncConn.tsx
+- Renamed "Schema file" radio label to `scripts/schema.sql`
+- Moved "Overwrite schema.sql" button from action row to inline next to the `scripts/schema.sql` radio (only visible in file mode)
+- Fixed stale error message: "Regenerate" → "Overwrite schema.sql"
+- Fixed LCS backtracking: only treat a line as a match when both `dp[i-1][j] < dp[i][j]` and `dp[i][j-1] < dp[i][j]` — prevents the wrong `);` occurrence from being matched and shifting diff highlighting by one line
 
 ## src/components/CreateSQLConn.tsx
-- Added "All Tables" button at the top of the left panel; when selected, the right panel shows all tables' DDL concatenated with a `-- table_name` comment header per table
+- Changed button label to just `Generate`
 
 ## src/actions/schemaSyncActions.ts
-- Added `\unrestrict` line filter in `generateCreateSQLFromUrl`: pg_dump on local PostgreSQL emits `\unrestrict <token>` lines that confuse the parser; stripped before calling `parsePgDumpByTable`
+- `execPgDump`: added `--schema=public` to exclude Neon's `neon_auth` schema from all dumps
+- `compareDDLWithFile`: added `filePath` to return type so the client can show the exact path in error messages
+- `regenerateSchemaFile`: removed `mkdir` — if `scripts/schema.sql` doesn't exist, returns `File not found: <path>`; never creates directories
+
+## src/actions/schemaUtils.ts
+- `normalize` in `diffDDLMaps`: filters out `START WITH \d+` lines so sequence start values don't cause false-positive "Different" results
 
 ## src/components/SchemaSyncConn.tsx
-- Replaced `sameConn` (key equality) with `sameUrl` (URL equality) — catches same-URL across different connection names; shows "Same URL for Source and Target"
-- `handleCompare` catch now shows "URL to database is invalid" instead of the raw Postgres error message
+- Added `ApplySQLPanel` component: shows SQL to apply to target
+- Added `applyMaxId` state; `handleSelectTable` fetches `MAX(pk)` from target via `fetchTablePKMaxFromUrl` when a "different" table is selected in DB mode
+- `DDLPanel`: shows `ApplySQLPanel` for `only_in_source` (full CREATE TABLE DDL, new table) and `different` (ALTER TABLE statements only) in DB mode
+- Added `parseColumnLine`, `parseCreateTableColumns`, `generateApplyStatements`: for "different" tables, generates ALTER TABLE statements for column nullability, type, default, new columns, named constraint removal, and source-only IDENTITY/constraint blocks — no CREATE TABLE in output
+
+## connections.json
+- Renamed key `next-chess` → `nextjs-chess` to match actual project directory
+
+## src/components/DatabaseToolsConn.tsx
+- Reordered tabs to: Create SQL, Schema Sync, Copy Tables, Backup
+- Changed default active tab from `backup` to `createsql`
+
+## src/actions/schemaUtils.ts
+- Added `is_identity` and `identity_generation` to `SchemaRow` type
+- Added `c.is_identity` and `c.identity_generation` to the `fetchSchema` SELECT — both come from `information_schema.columns`
+- Added both fields to the `diffSchemas` comparison so tables with a mismatched identity attribute (e.g. `GENERATED BY DEFAULT AS IDENTITY` in source but plain integer in target) are correctly flagged as `different` instead of `identical`
+
+## src/actions/schemaSyncActions.ts
+- Added `fetchTableMaxIdsFromUrl`: queries the sequence-backed pk column for each table (DISTINCT ON attnum), then runs a UNION ALL MAX query — returns `Record<string, number | null>` (table → max id)
+
+## src/actions/copyTablesActions.ts
+- Extended `TableComparisonRow` with `sourceMaxId` and `targetMaxId` fields
+- Updated `compare_tables` to call `fetchTableMaxIdsFromUrl` for both source and target in the existing `Promise.all`, and map results into each row
+- Added exported `repair_sequence` server action — public wrapper around `repair_sequences`, strips URL params, returns `{ success, message }`
+
+## src/components/CopyTableConn.tsx
+- Imported `repair_sequence`
+- Added `handleFixSeq(url, table)`: calls `repair_sequence`, sets message, then refreshes
+- Per row: computes `sourceSeqBad` and `targetSeqBad` (`nextSeq !== null && maxId !== null && nextSeq <= maxId`)
+- Src Seq / Tgt Seq cells turn red with ⚠ prefix and a "Fix" button when the sequence is behind the max id

@@ -10,6 +10,8 @@ export type SchemaRow = {
   max_len: number | null
   is_nullable: string
   column_default: string | null
+  is_identity: string
+  identity_generation: string | null
   is_pk: boolean
   is_unique: boolean
   has_index: boolean
@@ -43,6 +45,58 @@ export type SchemaCompareResult = {
   tableSummary: TableSummary[]
 }
 
+export type DDLComparisonRow = {
+  table_name: string
+  status:     TableStatus
+  sourceDDL:  string | null
+  targetDDL:  string | null
+}
+
+export type DDLCompareResult = {
+  label1: string
+  label2: string
+  rows:   DDLComparisonRow[]
+}
+
+//----------------------------------------------------------------------------------
+//  diffDDLMaps — pure function: compare two pre-built DDL maps → DDLCompareResult.
+//  DDL is normalised (trim + collapse blank lines) before comparison so whitespace
+//  differences between pg_dump versions don't create false positives.
+//  Used by both compareDDLsFromUrls (DB vs DB) and compareDDLWithFile (DB vs file).
+//----------------------------------------------------------------------------------
+export function diffDDLMaps(
+  srcMap: Map<string, string>,
+  tgtMap: Map<string, string>,
+  label1: string,
+  label2: string
+): DDLCompareResult {
+  const allTables = [...new Set([...srcMap.keys(), ...tgtMap.keys()])].sort()
+
+  function normalize(sql: string): string {
+    return sql.split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0)
+      .filter(l => !/^START WITH \d+$/.test(l))
+      .join('\n')
+  }
+
+  const rows: DDLComparisonRow[] = allTables.map(table_name => {
+    const sourceDDL = srcMap.get(table_name) ?? null
+    const targetDDL = tgtMap.get(table_name) ?? null
+    let status: TableStatus
+    if (sourceDDL !== null && targetDDL !== null) {
+      status = normalize(sourceDDL) === normalize(targetDDL) ? 'identical' : 'different'
+    } else {
+      status = sourceDDL !== null ? 'only_in_source' : 'only_in_target'
+    }
+    const result: DDLComparisonRow = { table_name, status, sourceDDL, targetDDL }
+    return result
+  })
+
+  const result: DDLCompareResult = { label1, label2, rows }
+  return result
+}
+
 //----------------------------------------------------------------------------------
 //  fetchSchema — query all columns in the public schema with PK, unique, index flags
 //----------------------------------------------------------------------------------
@@ -56,6 +110,8 @@ export async function fetchSchema(db: ArbitraryDb): Promise<SchemaRow[]> {
         c.character_maximum_length AS max_len,
         c.is_nullable,
         c.column_default,
+        c.is_identity,
+        c.identity_generation,
         EXISTS(
           SELECT 1 FROM information_schema.table_constraints tc
           JOIN information_schema.key_column_usage kcu
@@ -119,7 +175,9 @@ export function diffSchemas(
       src.data_type !== tgt.data_type ||
       src.max_len !== tgt.max_len ||
       src.is_nullable !== tgt.is_nullable ||
-      normalizeDefault(src.column_default) !== normalizeDefault(tgt.column_default)
+      normalizeDefault(src.column_default) !== normalizeDefault(tgt.column_default) ||
+      src.is_identity !== tgt.is_identity ||
+      src.identity_generation !== tgt.identity_generation
     ) {
       changed.push({ table_name: src.table_name, column_name: src.column_name, source: src, target: tgt })
     }

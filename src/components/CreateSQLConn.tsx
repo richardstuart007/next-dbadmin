@@ -75,7 +75,7 @@ export default function CreateSQLConn({ connections }: { connections: Connection
           overrideClass='h-6 px-2 py-2'
           disabled={!sourceKey || running}
         >
-          Generate from {sourceConn?.label ?? 'source'}
+          Generate
         </MyButton>
       </div>
 

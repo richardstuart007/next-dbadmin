@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { MyButton } from 'nextjs-shared/MyButton'
 import { MyInput } from 'nextjs-shared/MyInput'
 import { MyConfirmDialog } from 'nextjs-shared/MyConfirmDialog'
@@ -14,11 +14,12 @@ import {
   truncate_table,
   drop_table,
   repair_sequence,
+  vacuum_table,
 } from '@/src/actions/copyTablesActions'
 import type { CopyLog, TableComparisonRow } from '@/src/actions/copyTablesActions'
 import type { TableStatus } from '@/src/actions/schemaUtils'
 import ConnectionPicker from './ConnectionPicker'
-import { statusMeta, STATUS_FILTER_OPTIONS } from './SchemaSyncConn'
+import { statusMeta, STATUS_FILTER_OPTIONS, lineDiff, DiffPreBlock } from './SchemaSyncConn'
 import type { ConnectionEntry } from '@/src/types/connections'
 
 const HELP_ITEMS: HelpItem[] = [
@@ -68,13 +69,17 @@ export default function CopyTableConn({ connections }: { connections: Connection
   const [targetKey, setTargetKey]             = useState(secondKey)
   const [rows, setRows]                       = useState<TableComparisonRow[]>([])
   const [selectedTables, setSelectedTables]   = useState<Set<string>>(new Set())
+  const [copiedTables, setCopiedTables]       = useState<Set<string>>(new Set())
+  const [failedTables, setFailedTables]       = useState<Set<string>>(new Set())
   const [logs, setLogs]                       = useState<CopyLog[]>([])
   const [message, setMessage]                 = useState('')
   const [running, setRunning]                 = useState(false)
+  const [runningKey, setRunningKey]           = useState<string | null>(null)
   const [backupPrefix, setBackupPrefix]       = useState('')
   const [backupLogs, setBackupLogs]           = useState<CopyLog[]>([])
   const [backupConflicts, setBackupConflicts] = useState<string[]>([])
   const [selectedStatuses, setSelectedStatuses] = useState<Set<TableStatus>>(new Set())
+  const [diffTable, setDiffTable]             = useState('')
   const [confirmDialog, setConfirmDialog]     = useState<ConfirmDialogInt>({
     isOpen: false, title: '', subTitle: '', onConfirm: () => {},
   })
@@ -88,6 +93,8 @@ export default function CopyTableConn({ connections }: { connections: Connection
   const filteredRows = isAll ? rows : rows.filter(r => selectedStatuses.has(r.status))
   const selectableRows = filteredRows.filter(r => r.status !== 'only_in_target')
   const allSelected    = selectableRows.length > 0 && selectableRows.every(r => selectedTables.has(r.table))
+  const totalSourceSize = filteredRows.reduce((sum, r) => sum + (r.sourceSize ?? 0), 0)
+  const totalTargetSize = filteredRows.reduce((sum, r) => sum + (r.targetSize ?? 0), 0)
 
   const statusCounts = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.status] = (acc[r.status] ?? 0) + 1
@@ -113,6 +120,9 @@ export default function CopyTableConn({ connections }: { connections: Connection
     setSourceKey(key)
     setRows([])
     setSelectedTables(new Set())
+    setCopiedTables(new Set())
+    setFailedTables(new Set())
+    setDiffTable('')
     setLogs([])
     setMessage('')
   }
@@ -124,6 +134,9 @@ export default function CopyTableConn({ connections }: { connections: Connection
     setTargetKey(key)
     setRows([])
     setSelectedTables(new Set())
+    setCopiedTables(new Set())
+    setFailedTables(new Set())
+    setDiffTable('')
     setLogs([])
     setBackupLogs([])
     setBackupConflicts([])
@@ -137,14 +150,20 @@ export default function CopyTableConn({ connections }: { connections: Connection
     if (!sourceConn?.url || !targetConn?.url) return
     setMessage('Loading tables...')
     setRunning(true)
+    setRunningKey('load')
     setRows([])
     setSelectedTables(new Set())
+    setCopiedTables(new Set())
+    setFailedTables(new Set())
+    setDiffTable('')
     setLogs([])
     try {
       const result = await compare_tables({
-        sourceUrl: sourceConn.url,
-        targetUrl: targetConn.url,
-        caller:    'CopyTableConn',
+        sourceUrl:   sourceConn.url,
+        targetUrl:   targetConn.url,
+        caller:      'CopyTableConn',
+        sourceLabel: sourceConn.label,
+        targetLabel: targetConn.label,
       })
       setRows(result)
       setMessage(`Loaded ${result.length} table${result.length !== 1 ? 's' : ''}`)
@@ -152,6 +171,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
     }
   }
 
@@ -162,9 +182,11 @@ export default function CopyTableConn({ connections }: { connections: Connection
     if (!sourceConn?.url || !targetConn?.url) return
     try {
       const result = await compare_tables({
-        sourceUrl: sourceConn.url,
-        targetUrl: targetConn.url,
-        caller:    'CopyTableConn',
+        sourceUrl:   sourceConn.url,
+        targetUrl:   targetConn.url,
+        caller:      'CopyTableConn',
+        sourceLabel: sourceConn.label,
+        targetLabel: targetConn.label,
       })
       setRows(result)
     } catch {
@@ -202,23 +224,38 @@ export default function CopyTableConn({ connections }: { connections: Connection
     }
     setMessage('Copying tables...')
     setRunning(true)
+    setRunningKey('copy')
     setLogs([])
+    const tableList = Array.from(selectedTables)
     try {
       const result = await copy_tables({
         sourceUrl:   sourceConn.url,
         targetUrl:   targetConn.url,
-        tables:      Array.from(selectedTables),
+        tables:      tableList,
         sourceLabel: sourceConn.label,
         targetLabel: targetConn.label,
         caller:      'CopyTableConn',
       })
       setLogs(result.logs)
       setMessage(result.success ? 'Copy completed successfully' : 'Copy completed with errors — see log above')
+      //
+      //  Derive per-table outcome from the log details, which are
+      //  formatted as "<table> — <message>" for every event
+      //
+      const failed = new Set(
+        result.logs
+          .filter(l => l.event === 'ERROR' || l.event === 'SKIPPED')
+          .map(l => l.detail.split(' — ')[0])
+      )
+      setFailedTables(failed)
+      setCopiedTables(new Set(tableList.filter(t => !failed.has(t))))
+      setSelectedTables(new Set())
       await handleRefresh()
     } catch (error) {
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
     }
   }
 
@@ -242,15 +279,19 @@ export default function CopyTableConn({ connections }: { connections: Connection
     setConfirmDialog(prev => ({ ...prev, isOpen: false }))
     if (!targetConn?.url) return
     setRunning(true)
+    setRunningKey(`truncate-${table}`)
     setMessage(`Truncating ${table}...`)
     try {
-      const result = await truncate_table({ targetUrl: targetConn.url, table, caller: 'CopyTableConn' })
+      const result = await truncate_table({ targetUrl: targetConn.url, table, caller: 'CopyTableConn', label: targetConn.label })
       setMessage(result.success ? `${table} truncated` : `Truncate failed: ${result.message}`)
+      setCopiedTables(prev => { const next = new Set(prev); next.delete(table); return next })
+      setFailedTables(prev => { const next = new Set(prev); next.delete(table); return next })
       await handleRefresh()
     } catch (error) {
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
     }
   }
 
@@ -274,33 +315,60 @@ export default function CopyTableConn({ connections }: { connections: Connection
     setConfirmDialog(prev => ({ ...prev, isOpen: false }))
     if (!targetConn?.url) return
     setRunning(true)
+    setRunningKey(`drop-${table}`)
     setMessage(`Dropping ${table}...`)
     try {
-      const result = await drop_table({ targetUrl: targetConn.url, table, caller: 'CopyTableConn' })
+      const result = await drop_table({ targetUrl: targetConn.url, table, caller: 'CopyTableConn', label: targetConn.label })
       setMessage(result.success ? `${table} dropped` : `Drop failed: ${result.message}`)
       setSelectedTables(prev => { const next = new Set(prev); next.delete(table); return next })
+      setCopiedTables(prev => { const next = new Set(prev); next.delete(table); return next })
+      setFailedTables(prev => { const next = new Set(prev); next.delete(table); return next })
       await handleRefresh()
     } catch (error) {
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
     }
   }
 
   //----------------------------------------------------------------------------------------------
   //  handleFixSeq — resets a table's sequence to MAX(pk) in the given database
   //----------------------------------------------------------------------------------------------
-  async function handleFixSeq(url: string, table: string) {
+  async function handleFixSeq(url: string, table: string, side: 'src' | 'tgt') {
     setRunning(true)
+    setRunningKey(`fixseq-${side}-${table}`)
     setMessage(`Repairing sequence for ${table}...`)
+    const label = side === 'src' ? sourceConn?.label : targetConn?.label
     try {
-      const result = await repair_sequence({ targetUrl: url, table, caller: 'CopyTableConn' })
+      const result = await repair_sequence({ targetUrl: url, table, caller: 'CopyTableConn', label })
       setMessage(result.success ? `${table} — sequence repaired` : `Sequence repair failed: ${result.message}`)
       await handleRefresh()
     } catch (error) {
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
+    }
+  }
+
+  //----------------------------------------------------------------------------------------------
+  //  handleVacuum — runs VACUUM (FULL, ANALYZE) on a table in the given database
+  //----------------------------------------------------------------------------------------------
+  async function handleVacuum(url: string, table: string, side: 'src' | 'tgt') {
+    setRunning(true)
+    setRunningKey(`vacuum-${side}-${table}`)
+    setMessage(`Vacuuming ${table}...`)
+    const label = side === 'src' ? sourceConn?.label : targetConn?.label
+    try {
+      const result = await vacuum_table({ targetUrl: url, table, caller: 'CopyTableConn', label })
+      setMessage(result.success ? `${table} — vacuum full complete` : `Vacuum failed: ${result.message}`)
+      await handleRefresh()
+    } catch (error) {
+      setMessage(`Error: ${(error as Error).message}`)
+    } finally {
+      setRunning(false)
+      setRunningKey(null)
     }
   }
 
@@ -311,6 +379,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
     if (!targetConn?.url) return
     setMessage('Creating backups...')
     setRunning(true)
+    setRunningKey('backup')
     setBackupLogs([])
     setBackupConflicts([])
     try {
@@ -318,7 +387,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
         table,
         backupName: `${backupPrefix}_${table}`,
       }))
-      const result = await backup_tables({ targetUrl: targetConn.url, tables, caller: 'CopyTableConn' })
+      const result = await backup_tables({ targetUrl: targetConn.url, tables, caller: 'CopyTableConn', label: targetConn.label })
       if (result.conflicts.length > 0) {
         setBackupConflicts(result.conflicts)
         setMessage('Backup blocked — resolve conflicts before retrying')
@@ -331,6 +400,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
       setMessage(`Error: ${(error as Error).message}`)
     } finally {
       setRunning(false)
+      setRunningKey(null)
     }
   }
 
@@ -352,6 +422,13 @@ export default function CopyTableConn({ connections }: { connections: Connection
     } else {
       setSelectedTables(new Set(selectableRows.map(r => r.table)))
     }
+  }
+
+  //----------------------------------------------------------------------------------------------
+  //  toggleDiff — expands/collapses the inline DDL diff panel for a "Different" row
+  //----------------------------------------------------------------------------------------------
+  function toggleDiff(table: string) {
+    setDiffTable(prev => prev === table ? '' : table)
   }
 
   //----------------------------------------------------------------------------------------------
@@ -397,7 +474,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
             overrideClass='h-6 px-2 py-2 shrink-0'
             disabled={!sourceKey || !targetKey || running}
           >
-            {rows.length > 0 ? 'Refresh' : 'Load Tables'}
+            {runningKey === 'load' ? 'Running...' : (rows.length > 0 ? 'Refresh' : 'Load Tables')}
           </MyButton>
         )}
       </div>
@@ -424,7 +501,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                 overrideClass='h-6 px-2 py-2 bg-red-500 hover:bg-red-600 shrink-0'
                 disabled={running}
               >
-                Copy {selectedTables.size} Tables
+                {runningKey === 'copy' ? 'Running...' : `Copy ${selectedTables.size} Tables`}
               </MyButton>
               <MyInput
                 overrideClass='w-28 font-mono text-xs h-6'
@@ -438,7 +515,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                 overrideClass='h-6 px-2 py-2 bg-amber-500 hover:bg-amber-600 shrink-0'
                 disabled={!backupPrefix.trim() || running}
               >
-                Backup {selectedTables.size}
+                {runningKey === 'backup' ? 'Running...' : `Backup ${selectedTables.size}`}
               </MyButton>
             </div>
           )}
@@ -489,10 +566,12 @@ export default function CopyTableConn({ connections }: { connections: Connection
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>
                     {sourceConn?.label ?? 'Source'}
                   </th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Src Size</th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Src Seq</th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>
                     {targetConn?.label ?? 'Target'}
                   </th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Tgt Size</th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Tgt Seq</th>
                   <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Counts</th>
                   <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Actions</th>
@@ -505,8 +584,11 @@ export default function CopyTableConn({ connections }: { connections: Connection
                   const countsMatch   = bothExist && r.sourceCount === r.targetCount
                   const sourceSeqBad  = r.sourceNextSeq !== null && r.sourceMaxId !== null && r.sourceNextSeq <= r.sourceMaxId
                   const targetSeqBad  = r.targetNextSeq !== null && r.targetMaxId !== null && r.targetNextSeq <= r.targetMaxId
+                  const isDifferent = r.status === 'different'
+                  const diffOpen    = diffTable === r.table
                   return (
-                    <tr key={r.table} className='border-b border-gray-100'>
+                    <Fragment key={r.table}>
+                    <tr className='border-b border-gray-100'>
                       <td className='px-2 py-1 text-center'>
                         {!isTargetOnly && (
                           <input
@@ -517,15 +599,41 @@ export default function CopyTableConn({ connections }: { connections: Connection
                         )}
                       </td>
                       <td className={`px-2 py-1 font-mono ${r.status === 'identical' ? 'text-gray-500' : 'font-semibold'}`}>
-                        {r.table}
+                        <div className='flex items-center gap-1'>
+                          {r.table}
+                          {copiedTables.has(r.table) && (
+                            <span className='px-1 rounded text-xs font-sans font-normal bg-green-100 text-green-800'>Copied</span>
+                          )}
+                          {failedTables.has(r.table) && (
+                            <span className='px-1 rounded text-xs font-sans font-normal bg-red-100 text-red-800'>Error</span>
+                          )}
+                        </div>
                       </td>
                       <td className='px-2 py-1'>
-                        <span className={`px-1 rounded ${statusMeta(r.status).className}`}>
+                        <span
+                          className={`px-1 rounded ${statusMeta(r.status).className} ${isDifferent ? 'cursor-pointer underline decoration-dotted' : ''}`}
+                          onClick={isDifferent ? () => toggleDiff(r.table) : undefined}
+                          title={isDifferent ? 'Click to view diff' : undefined}
+                        >
                           {statusMeta(r.status).label}
                         </span>
                       </td>
                       <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
                         {r.sourceCount !== null ? r.sourceCount.toLocaleString() : '—'}
+                      </td>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
+                        <div className='flex items-center justify-end gap-1'>
+                          {r.sourceSize !== null ? `${r.sourceSize.toLocaleString()} MB` : '—'}
+                          {r.sourceSize !== null && sourceConn?.url && (
+                            <MyButton
+                              onClick={() => handleVacuum(sourceConn.url!, r.table, 'src')}
+                              overrideClass='h-4 px-1 py-0 text-xs bg-blue-500 hover:bg-blue-600 shrink-0'
+                              disabled={running}
+                            >
+                              {runningKey === `vacuum-src-${r.table}` ? 'Running...' : 'Vacuum Full'}
+                            </MyButton>
+                          )}
+                        </div>
                       </td>
                       <td className={`px-2 py-1 text-right tabular-nums ${sourceSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
                         <div className='flex items-center justify-end gap-1'>
@@ -533,11 +641,11 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           {r.sourceNextSeq !== null ? r.sourceNextSeq.toLocaleString() : '—'}
                           {sourceSeqBad && sourceConn?.url && (
                             <MyButton
-                              onClick={() => handleFixSeq(sourceConn.url!, r.table)}
+                              onClick={() => handleFixSeq(sourceConn.url!, r.table, 'src')}
                               overrideClass='h-4 px-1 py-0 text-xs bg-red-500 hover:bg-red-600 shrink-0'
                               disabled={running}
                             >
-                              Fix
+                              {runningKey === `fixseq-src-${r.table}` ? 'Running...' : 'Fix'}
                             </MyButton>
                           )}
                         </div>
@@ -545,17 +653,31 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
                         {r.targetCount !== null ? r.targetCount.toLocaleString() : '—'}
                       </td>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
+                        <div className='flex items-center justify-end gap-1'>
+                          {r.targetSize !== null ? `${r.targetSize.toLocaleString()} MB` : '—'}
+                          {r.targetSize !== null && targetConn?.url && (
+                            <MyButton
+                              onClick={() => handleVacuum(targetConn.url!, r.table, 'tgt')}
+                              overrideClass='h-4 px-1 py-0 text-xs bg-blue-500 hover:bg-blue-600 shrink-0'
+                              disabled={running}
+                            >
+                              {runningKey === `vacuum-tgt-${r.table}` ? 'Running...' : 'Vacuum Full'}
+                            </MyButton>
+                          )}
+                        </div>
+                      </td>
                       <td className={`px-2 py-1 text-right tabular-nums ${targetSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
                         <div className='flex items-center justify-end gap-1'>
                           {targetSeqBad && <span title={`Sequence (${r.targetNextSeq?.toLocaleString()}) ≤ max id (${r.targetMaxId?.toLocaleString()})`}>⚠</span>}
                           {r.targetNextSeq !== null ? r.targetNextSeq.toLocaleString() : '—'}
                           {targetSeqBad && targetConn?.url && (
                             <MyButton
-                              onClick={() => handleFixSeq(targetConn.url!, r.table)}
+                              onClick={() => handleFixSeq(targetConn.url!, r.table, 'tgt')}
                               overrideClass='h-4 px-1 py-0 text-xs bg-red-500 hover:bg-red-600 shrink-0'
                               disabled={running}
                             >
-                              Fix
+                              {runningKey === `fixseq-tgt-${r.table}` ? 'Running...' : 'Fix'}
                             </MyButton>
                           )}
                         </div>
@@ -575,21 +697,54 @@ export default function CopyTableConn({ connections }: { connections: Connection
                               overrideClass='h-5 px-1.5 py-0 text-xs bg-amber-500 hover:bg-amber-600 shrink-0'
                               disabled={running}
                             >
-                              Truncate
+                              {runningKey === `truncate-${r.table}` ? 'Running...' : 'Truncate'}
                             </MyButton>
                             <MyButton
                               onClick={() => handleDrop(r.table)}
                               overrideClass='h-5 px-1.5 py-0 text-xs bg-red-500 hover:bg-red-600 shrink-0'
                               disabled={running}
                             >
-                              Drop
+                              {runningKey === `drop-${r.table}` ? 'Running...' : 'Drop'}
                             </MyButton>
                           </div>
                         )}
                       </td>
                     </tr>
+                    {diffOpen && (() => {
+                      const { srcLines, tgtLines } = lineDiff(r.sourceDDL ?? '', r.targetDDL ?? '')
+                      return (
+                        <tr className='border-b border-gray-100 bg-gray-50'>
+                          <td colSpan={11} className='px-2 py-2'>
+                            <div className='flex gap-2 items-start'>
+                              <div className='flex-1'>
+                                <p className='text-xs font-semibold text-gray-600 mb-1'>{sourceConn?.label ?? 'Source'}</p>
+                                <DiffPreBlock lines={srcLines} highlightClass='bg-blue-200 text-blue-900' />
+                              </div>
+                              <div className='flex-1'>
+                                <p className='text-xs font-semibold text-gray-600 mb-1'>{targetConn?.label ?? 'Target'}</p>
+                                <DiffPreBlock lines={tgtLines} highlightClass='bg-orange-200 text-orange-900' />
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })()}
+                    </Fragment>
                   )
                 })}
+                <tr className='border-t-2 border-gray-300 bg-gray-50 font-semibold'>
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1'>Total</td>
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1 text-right tabular-nums'>{totalSourceSize.toLocaleString()} MB</td>
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1 text-right tabular-nums'>{totalTargetSize.toLocaleString()} MB</td>
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1' />
+                  <td className='px-2 py-1' />
+                </tr>
               </tbody>
             </table>
           </div>

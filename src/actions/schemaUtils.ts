@@ -77,6 +77,12 @@ export function diffDDLMaps(
       .map(l => l.trim())
       .filter(l => l.length > 0)
       .filter(l => !/^START WITH \d+$/.test(l))
+      //
+      //  PG17+ catalogs NOT NULL as a named constraint only for tables created after the
+      //  server's PG17 upgrade — tables predating it keep the old unnamed form. Strip the
+      //  auto-generated name so this version artifact doesn't register as a real difference.
+      //
+      .map(l => l.replace(/CONSTRAINT\s+\S+\s+NOT NULL/gi, 'NOT NULL'))
       .join('\n')
   }
 

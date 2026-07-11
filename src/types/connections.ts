@@ -2,6 +2,7 @@ export type Connection = {
   url: string
   label: string
   colour?: string
+  location?: string
 }
 
 export type ConnectionsFile = Record<string, Record<string, Connection>>
@@ -13,4 +14,5 @@ export type ConnectionEntry = {
   label:      string
   url:        string
   colour?:    string
+  location?:  string
 }

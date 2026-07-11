@@ -18,7 +18,7 @@ import type { ConnectionEntry } from '@/src/types/connections'
 
 type CompareMode = 'db' | 'file'
 
-type DiffLine = { text: string; kind: 'same' | 'src' | 'tgt' }
+export type DiffLine = { text: string; kind: 'same' | 'src' | 'tgt' }
 
 const HELP_ITEMS: HelpItem[] = [
   {
@@ -47,7 +47,7 @@ const HELP_ITEMS: HelpItem[] = [
 //  lineDiff — LCS-based line diff. srcLines contains 'same'/'src' lines;
 //  tgtLines contains 'same'/'tgt' lines. Used to highlight what changed per panel.
 //----------------------------------------------------------------------------------------------
-function lineDiff(src: string, tgt: string): { srcLines: DiffLine[]; tgtLines: DiffLine[] } {
+export function lineDiff(src: string, tgt: string): { srcLines: DiffLine[]; tgtLines: DiffLine[] } {
   const a = src.split('\n').filter(l => l.trim())
   const b = tgt.split('\n').filter(l => l.trim())
   const m = a.length
@@ -161,6 +161,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
           label1:          sourceConn.label,
           label2:          targetConn!.label,
           excludePrefixes: excludePrefix,
+          caller:          'SchemaSyncConn',
         })
       } else {
         const fileResult = await compareDDLWithFile({
@@ -168,6 +169,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
           projectKey:      sourceConn.projectKey,
           label1:          sourceConn.label,
           excludePrefixes: excludePrefix,
+          caller:          'SchemaSyncConn',
         })
         if (!fileResult.fileExists) {
           setMessage(`File not found: ${fileResult.filePath}`)
@@ -183,8 +185,8 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
       if (compareMode === 'db') {
         const allTables = r.rows.map(t => t.table_name)
         const [sc, tc] = await Promise.all([
-          fetchTableCountsFromUrl(sourceConn.url, allTables),
-          fetchTableCountsFromUrl(targetConn!.url, allTables),
+          fetchTableCountsFromUrl(sourceConn.url, allTables, 'SchemaSyncConn', sourceConn.label),
+          fetchTableCountsFromUrl(targetConn!.url, allTables, 'SchemaSyncConn', targetConn!.label),
         ])
         setSourceCounts(sc)
         setTargetCounts(tc)
@@ -205,7 +207,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
     setResult(null)
     setMessage('Overwriting schema.sql...')
     try {
-      const r = await regenerateSchemaFile(sourceConn.url, sourceConn.projectKey)
+      const r = await regenerateSchemaFile(sourceConn.url, sourceConn.projectKey, 'SchemaSyncConn', sourceConn.label)
       if (!r.success) { setMessage(r.message); return }
       setMessage(`${r.message} — comparing...`)
     } catch {
@@ -227,7 +229,7 @@ export default function SchemaSyncConn({ connections }: { connections: Connectio
     if (newTable && compareMode === 'db' && targetConn?.url) {
       const row = result?.rows.find(r => r.table_name === newTable)
       if (row && row.status === 'different') {
-        fetchTablePKMaxFromUrl(targetConn.url, newTable).then(max => {
+        fetchTablePKMaxFromUrl(targetConn.url, newTable, 'SchemaSyncConn', targetConn.label).then(max => {
           setApplyMaxId(max)
         })
       }
@@ -384,7 +386,7 @@ export const STATUS_FILTER_OPTIONS = [
 //----------------------------------------------------------------------------------------------
 //  DiffPreBlock — renders diff lines with per-line highlighting for changed lines
 //----------------------------------------------------------------------------------------------
-function DiffPreBlock({ lines, highlightClass }: { lines: DiffLine[]; highlightClass: string }) {
+export function DiffPreBlock({ lines, highlightClass }: { lines: DiffLine[]; highlightClass: string }) {
   return (
     <pre className='text-xs font-mono bg-gray-50 border rounded px-3 py-2 whitespace-pre-wrap overflow-auto max-h-96'>
       {lines.map((l, i) => (

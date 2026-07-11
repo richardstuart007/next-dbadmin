@@ -1,19 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import CopyTableConn from './CopyTableConn'
 import SchemaSyncConn from './SchemaSyncConn'
 import BackupConn from './BackupConn'
 import CreateSQLConn from './CreateSQLConn'
+import LoggingConn from './LoggingConn'
 import type { ConnectionEntry } from '@/src/types/connections'
 
-type Tab = 'backup' | 'copy' | 'schema' | 'createsql'
+type Tab = 'backup' | 'copy' | 'schema' | 'createsql' | 'logging'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'createsql', label: 'Create SQL' },
   { id: 'schema',    label: 'Schema Sync' },
   { id: 'copy',      label: 'Copy Tables' },
   { id: 'backup',    label: 'Backup' },
+  { id: 'logging',   label: 'Logging' },
 ]
 
 //----------------------------------------------------------------------------------------------
@@ -21,7 +23,16 @@ const TABS: { id: Tab; label: string }[] = [
 //  Receives flattened ConnectionEntry[] from the server page (read from connections.json).
 //----------------------------------------------------------------------------------------------
 export default function DatabaseToolsConn({ connections }: { connections: ConnectionEntry[] }) {
-  const [activeTab, setActiveTab] = useState<Tab>('createsql')
+  const [activeTab, setActiveTab]   = useState<Tab>('createsql')
+  const [loggingKey, setLoggingKey] = useState(0)
+
+  //----------------------------------------------------------------------------------------------
+  //  Force LoggingConn to remount on every visit to the Logging tab, since tabs stay mounted
+  //  (just hidden) when switching — otherwise its one-time fetch never re-runs.
+  //----------------------------------------------------------------------------------------------
+  useEffect(() => {
+    if (activeTab === 'logging') setLoggingKey(k => k + 1)
+  }, [activeTab])
 
   if (connections.length === 0) {
     return (
@@ -54,6 +65,7 @@ export default function DatabaseToolsConn({ connections }: { connections: Connec
         <div className={activeTab === 'copy'      ? '' : 'hidden'}><CopyTableConn  connections={connections} /></div>
         <div className={activeTab === 'schema'    ? '' : 'hidden'}><SchemaSyncConn connections={connections} /></div>
         <div className={activeTab === 'createsql' ? '' : 'hidden'}><CreateSQLConn  connections={connections} /></div>
+        <div className={activeTab === 'logging'   ? '' : 'hidden'}><LoggingConn key={loggingKey} /></div>
       </div>
     </div>
   )

@@ -4,7 +4,8 @@ import { execSync, spawnSync, ExecSyncOptions } from 'child_process'
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { compareSchemasFromUrls, fetchTableCountsFromUrl, fetchTableSequencesFromUrl, fetchTableMaxIdsFromUrl } from '@/src/actions/schemaSyncActions'
+import { write_logging } from 'nextjs-shared/write_logging'
+import { compareDDLsFromUrls, fetchTableCountsFromUrl, fetchTableSequencesFromUrl, fetchTableMaxIdsFromUrl, fetchTableSizesFromUrl } from '@/src/actions/schemaSyncActions'
 import type { TableStatus } from '@/src/actions/schemaUtils'
 
 const PG_BIN_PATHS = [
@@ -57,6 +58,10 @@ export type TableComparisonRow = {
   targetNextSeq: number | null
   sourceMaxId:   number | null
   targetMaxId:   number | null
+  sourceDDL:     string | null
+  targetDDL:     string | null
+  sourceSize:    number | null
+  targetSize:    number | null
 }
 
 //----------------------------------------------------------------------------------
@@ -176,16 +181,53 @@ async function repair_sequences(cleanTargetUrl: string, table: string): Promise<
 export async function repair_sequence({
   targetUrl,
   table,
+  caller = '',
+  label  = '',
 }: {
   targetUrl: string
   table:     string
   caller?:   string
+  label?:    string
 }): Promise<{ success: boolean; message: string }> {
   const cleanTarget = stripUnsupportedParams(targetUrl)
   const logs = await repair_sequences(cleanTarget, table)
   const hasError = logs.some(l => l.event === 'ERROR')
   const detail   = logs[0]?.detail ?? `${table} — no sequence found`
+  await write_logging({
+    lg_functionname: 'repair_sequence',
+    lg_caller:       caller,
+    lg_msg:          `[${label || 'target'}] table=${table} — ` + (hasError ? `sequence repair failed: ${detail}` : `sequence repaired: ${detail}`),
+    lg_severity:     hasError ? 'E' : 'I',
+  })
   return { success: !hasError, message: detail }
+}
+
+//----------------------------------------------------------------------------------
+//  vacuum_table — public server action: VACUUM (FULL, ANALYZE) a table to reclaim
+//  disk space and refresh planner statistics. Rewrites the table under an exclusive
+//  lock — blocks reads/writes for the duration, unlike a plain VACUUM.
+//----------------------------------------------------------------------------------
+export async function vacuum_table({
+  targetUrl,
+  table,
+  caller = '',
+  label  = '',
+}: {
+  targetUrl: string
+  table:     string
+  caller?:   string
+  label?:    string
+}): Promise<{ success: boolean; message: string }> {
+  const cleanTarget = stripUnsupportedParams(targetUrl)
+  const { stderr } = spawnPg([cleanTarget, '-c', `VACUUM (FULL, ANALYZE) "${table}"`])
+  if (stderr && /error/i.test(stderr)) {
+    const message = `${table} — vacuum failed: ${stderr.trim()}`
+    await write_logging({ lg_functionname: 'vacuum_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — ${message}`, lg_severity: 'E' })
+    return { success: false, message }
+  }
+  const message = `${table} — vacuumed`
+  await write_logging({ lg_functionname: 'vacuum_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — vacuumed`, lg_severity: 'I' })
+  return { success: true, message }
 }
 
 //----------------------------------------------------------------------------------
@@ -198,6 +240,7 @@ export async function copy_tables({
   tables,
   sourceLabel = '',
   targetLabel = '',
+  caller = '',
 }: {
   sourceUrl: string
   targetUrl: string
@@ -271,13 +314,18 @@ export async function copy_tables({
         allLogs.push(log)
       }
 
-      void sourceLabel
-      void targetLabel
-
     } finally {
       if (existsSync(tmpFile)) unlinkSync(tmpFile)
     }
   }
+
+  const summary = `${sourceLabel || 'source'} → ${targetLabel || 'target'} — ${tables.length} table(s): ${tables.join(', ')}`
+  await write_logging({
+    lg_functionname: 'copy_tables',
+    lg_caller:       caller,
+    lg_msg:          hasError ? `Copy completed with errors: ${summary}` : `Copy completed: ${summary}`,
+    lg_severity:     hasError ? 'E' : 'I',
+  })
 
   return { success: !hasError, logs: allLogs }
 }
@@ -289,10 +337,13 @@ export async function copy_tables({
 export async function backup_tables({
   targetUrl,
   tables,
+  caller = '',
+  label  = '',
 }: {
   targetUrl: string
   tables: { table: string; backupName: string }[]
   caller?: string
+  label?:  string
 }): Promise<BackupResult> {
   const cleanTarget = stripUnsupportedParams(targetUrl)
   const backupNames = tables.map(t => t.backupName)
@@ -305,6 +356,12 @@ export async function backup_tables({
   const existing = checkOut.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('('))
 
   if (existing.length > 0) {
+    await write_logging({
+      lg_functionname: 'backup_tables',
+      lg_caller:       caller,
+      lg_msg:          `[${label || 'target'}] tables=${tables.map(t => t.table).join(', ')} — backup blocked, names already exist: ${existing.join(', ')}`,
+      lg_severity:     'E',
+    })
     return { conflicts: existing, logs: [] }
   }
 
@@ -321,6 +378,14 @@ export async function backup_tables({
     }
   }
 
+  const hasError = logs.some(l => l.event === 'ERROR')
+  await write_logging({
+    lg_functionname: 'backup_tables',
+    lg_caller:       caller,
+    lg_msg:          `[${label || 'target'}] tables=${tables.map(t => t.table).join(', ')} — backup ${hasError ? 'completed with errors' : 'completed'}: ${logs.map(l => l.detail).join('; ')}`,
+    lg_severity:     hasError ? 'E' : 'I',
+  })
+
   return { conflicts: [], logs }
 }
 
@@ -331,30 +396,38 @@ export async function backup_tables({
 export async function compare_tables({
   sourceUrl,
   targetUrl,
+  caller = '',
+  sourceLabel = '',
+  targetLabel = '',
 }: {
-  sourceUrl: string
-  targetUrl: string
-  caller?:   string
+  sourceUrl:    string
+  targetUrl:    string
+  caller?:      string
+  sourceLabel?: string
+  targetLabel?: string
 }): Promise<TableComparisonRow[]> {
-  const schemaResult = await compareSchemasFromUrls({
+  const ddlResult = await compareDDLsFromUrls({
     url1:   sourceUrl,
     url2:   targetUrl,
-    label1: '',
-    label2: '',
+    label1: sourceLabel,
+    label2: targetLabel,
+    caller,
   })
 
-  const allTables = schemaResult.tableSummary.map(t => t.table_name)
+  const allTables = ddlResult.rows.map(t => t.table_name)
 
-  const [sourceCounts, targetCounts, sourceSeqs, targetSeqs, sourceMaxIds, targetMaxIds] = await Promise.all([
-    fetchTableCountsFromUrl(sourceUrl, allTables),
-    fetchTableCountsFromUrl(targetUrl, allTables),
-    fetchTableSequencesFromUrl(sourceUrl, allTables),
-    fetchTableSequencesFromUrl(targetUrl, allTables),
-    fetchTableMaxIdsFromUrl(sourceUrl, allTables),
-    fetchTableMaxIdsFromUrl(targetUrl, allTables),
+  const [sourceCounts, targetCounts, sourceSeqs, targetSeqs, sourceMaxIds, targetMaxIds, sourceSizes, targetSizes] = await Promise.all([
+    fetchTableCountsFromUrl(sourceUrl, allTables, caller, sourceLabel),
+    fetchTableCountsFromUrl(targetUrl, allTables, caller, targetLabel),
+    fetchTableSequencesFromUrl(sourceUrl, allTables, caller, sourceLabel),
+    fetchTableSequencesFromUrl(targetUrl, allTables, caller, targetLabel),
+    fetchTableMaxIdsFromUrl(sourceUrl, allTables, caller, sourceLabel),
+    fetchTableMaxIdsFromUrl(targetUrl, allTables, caller, targetLabel),
+    fetchTableSizesFromUrl(sourceUrl, allTables, caller, sourceLabel),
+    fetchTableSizesFromUrl(targetUrl, allTables, caller, targetLabel),
   ])
 
-  return schemaResult.tableSummary.map(t => ({
+  return ddlResult.rows.map(t => ({
     table:         t.table_name,
     status:        t.status,
     sourceCount:   t.status !== 'only_in_target' ? (sourceCounts[t.table_name] ?? null) : null,
@@ -363,6 +436,10 @@ export async function compare_tables({
     targetNextSeq: t.status !== 'only_in_source' ? (targetSeqs[t.table_name] ?? null) : null,
     sourceMaxId:   t.status !== 'only_in_target' ? (sourceMaxIds[t.table_name] ?? null) : null,
     targetMaxId:   t.status !== 'only_in_source' ? (targetMaxIds[t.table_name] ?? null) : null,
+    sourceSize:    t.status !== 'only_in_target' ? (sourceSizes[t.table_name] ?? null) : null,
+    targetSize:    t.status !== 'only_in_source' ? (targetSizes[t.table_name] ?? null) : null,
+    sourceDDL:     t.sourceDDL,
+    targetDDL:     t.targetDDL,
   }))
 }
 
@@ -372,16 +449,21 @@ export async function compare_tables({
 export async function truncate_table({
   targetUrl,
   table,
+  caller = '',
+  label  = '',
 }: {
   targetUrl: string
   table:     string
   caller?:   string
+  label?:    string
 }): Promise<{ success: boolean; message: string }> {
   const cleanTarget = stripUnsupportedParams(targetUrl)
   const { stderr } = spawnPg([cleanTarget, '-c', `TRUNCATE TABLE "${table}" RESTART IDENTITY`])
   if (stderr && /error/i.test(stderr)) {
+    await write_logging({ lg_functionname: 'truncate_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — truncate failed: ${stderr.trim()}`, lg_severity: 'E' })
     return { success: false, message: stderr.trim() }
   }
+  await write_logging({ lg_functionname: 'truncate_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — truncated and sequence reset`, lg_severity: 'I' })
   return { success: true, message: `${table} truncated and sequence reset` }
 }
 
@@ -391,15 +473,20 @@ export async function truncate_table({
 export async function drop_table({
   targetUrl,
   table,
+  caller = '',
+  label  = '',
 }: {
   targetUrl: string
   table:     string
   caller?:   string
+  label?:    string
 }): Promise<{ success: boolean; message: string }> {
   const cleanTarget = stripUnsupportedParams(targetUrl)
   const { stderr } = spawnPg([cleanTarget, '-c', `DROP TABLE "${table}"`])
   if (stderr && /error/i.test(stderr)) {
+    await write_logging({ lg_functionname: 'drop_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — drop failed: ${stderr.trim()}`, lg_severity: 'E' })
     return { success: false, message: stderr.trim() }
   }
+  await write_logging({ lg_functionname: 'drop_table', lg_caller: caller, lg_msg: `[${label || 'target'}] table=${table} — dropped`, lg_severity: 'I' })
   return { success: true, message: `${table} dropped` }
 }

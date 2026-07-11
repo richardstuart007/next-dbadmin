@@ -21,6 +21,7 @@ export default function Page() {
           label:      conn.label,
           url:        conn.url,
           colour:     conn.colour,
+          location:   conn.location,
         })
       }
     }

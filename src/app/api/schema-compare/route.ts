@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await compareSchemasFromUrls({ url1, url2, label1, label2, excludePrefixes: exclude })
+    const result = await compareSchemasFromUrls({ url1, url2, label1, label2, excludePrefixes: exclude, caller: 'schema-compare-route' })
     return NextResponse.json(result)
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 })

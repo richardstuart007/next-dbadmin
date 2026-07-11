@@ -45,7 +45,7 @@ export default function CreateSQLConn({ connections }: { connections: Connection
     setSelectedTable('')
     setMessage('Generating CREATE SQL...')
     try {
-      const ddls = await generateCreateSQLFromUrl(sourceConn.url)
+      const ddls = await generateCreateSQLFromUrl(sourceConn.url, 'CreateSQLConn', sourceConn.label)
       setTableDDLs(ddls)
       setSelectedTable(ddls[0]?.table_name ?? '')
       setMessage(`${ddls.length} table${ddls.length !== 1 ? 's' : ''}`)

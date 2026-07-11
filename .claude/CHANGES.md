@@ -1,95 +1,48 @@
-# Changes — next-dbadmin, "version": "1.0.3"
+# Changes — next-dbadmin, "version": "1.0.4"
 
-## src/actions/copyTablesActions.ts
-- `truncate_table`: replaced plain `TRUNCATE TABLE` + `repair_sequences()` with `TRUNCATE TABLE ... RESTART IDENTITY` — single atomic statement, same outcome, no separate sequence-repair query needed
+## 2026-07-11 — Fix silent SSL failure against Aiven (and other custom-CA) targets
 
-## src/actions/schemaUtils.ts
-- Added `DDLComparisonRow` type: `{ table_name, status, sourceDDL, targetDDL }`
-- Added `DDLCompareResult` type: `{ label1, label2, rows: DDLComparisonRow[] }`
+### src/lib/dbArbitrary.ts
+- `createArbitraryDb` and `runBatch` now strip `sslmode` from the connection string and pass `ssl: { rejectUnauthorized: false }` explicitly to `pg.Client`.
+- Root cause: the installed `pg-connection-string` treats `sslmode=require` as an alias for `verify-full` (full CA chain + hostname verification) unless `uselibpqcompat` is set. Aiven signs its certs with its own CA, which isn't in Node's trust store, so every query routed through `createArbitraryDb` (row counts, sizes, sequences, max ids) was throwing and being silently swallowed by try/catch blocks in `schemaSyncActions.ts`, showing as blank `—` for every target-side value even though the actual copy (via `psql`/`pg_dump`, which handle `sslmode=require` the traditional lenient way) succeeded.
+- Verified by connecting directly to the real Aiven URL with the fixed `Client` config — succeeded where it previously failed.
 
-## src/actions/schemaSyncActions.ts
-- Added `compareDDLsFromUrls`: runs `generateCreateSQLFromUrl` against both databases in parallel, normalises DDL (trim + collapse blank lines), compares per table → identical / different / only_in_source / only_in_target
+## 2026-07-11 — Wire up write_logging for Copy Tables actions
 
-## src/components/SchemaSyncConn.tsx
-- Replaced `information_schema`-based column comparison with full DDL comparison via `compareDDLsFromUrls`
-- On table click: shows DDL panel adapting to status — identical (grey), source-only (blue, "run this"), target-only (orange, "orphan"), different (side-by-side blue/orange with source as reference)
-- Row counts retained alongside DDL comparison
+### src/actions/copyTablesActions.ts
+- `repair_sequence`, `vacuum_table`, `copy_tables`, `backup_tables`, `truncate_table`, `drop_table` now call `write_logging` (severity `'I'` on success, `'E'` on failure), using the `caller` param already passed in from `CopyTableConn.tsx` but never previously destructured or used.
+- Root cause: none of these action functions ever called `write_logging`, despite `caller` being accepted as a parameter — logging was simply never wired up, not misrouted. `write_logging` reads `POSTGRES_URL` directly, so entries land in this project's own `xlg_logging` table regardless of which source/target connection the action operated on.
 
-## src/lib/schemaPaths.ts (new)
-- `schemaFilePath(projectKey)` — resolves `C:\Users\richa\github\<projectKey>\scripts\schema.sql`
+## 2026-07-11 — Extend logging to read-only fetch/compare functions, add environment + table context, add Logging tab
 
-## src/actions/schemaSyncActions.ts
-- Added `fs/promises` and `schemaFilePath` imports
-- Extracted `diffDDLMaps(srcMap, tgtMap, label1, label2)` pure function — shared by both comparison modes
-- Refactored `compareDDLsFromUrls` to call `diffDDLMaps` (no behaviour change)
-- Added `readSchemaFile(projectKey)` private helper — reads and parses `scripts/schema.sql`
-- Added `regenerateSchemaFile(url, projectKey)` — writes pg_dump output to `scripts/schema.sql`
-- Added `compareDDLWithFile({ url, projectKey, label1, excludePrefixes })` — DB vs schema.sql comparison, returns `DDLCompareResult & { fileExists: boolean }`
+### src/actions/schemaSyncActions.ts
+- All 10 exported functions (`fetchTableMaxIdsFromUrl`, `fetchTableSequencesFromUrl`, `fetchTablePKMaxFromUrl`, `fetchTableCountsFromUrl`, `fetchTableSizesFromUrl`, `compareSchemasFromUrls`, `compareDDLsFromUrls`, `regenerateSchemaFile`, `compareDDLWithFile`, `generateCreateSQLFromUrl`) now call `write_logging`, including the previously-unlogged read-only fetches (per user: "in dev mode ... we report everything").
+- Added a `label` param (environment name, e.g. connection label) to every function alongside the existing `caller` param, and every log message now explicitly includes `[environment]` and `table(s)=...` so log entries answer: which environment, which table(s), which caller (`lg_caller` column), which action (`lg_functionname` column).
 
-## src/components/SchemaSyncConn.tsx
-- Added `compareMode: 'db' | 'file'` toggle (radio buttons) between Target DB and Schema file modes
-- File mode: compares live DB against `scripts/schema.sql`; Regenerate button writes pg_dump output to file
-- File mode hides Target DB picker and row count columns
-- Added `lineDiff(src, tgt)` — LCS-based line diff returning `srcLines`/`tgtLines` with `'same'|'src'|'tgt'` kind
-- Added `DiffPreBlock` — renders diff lines with per-line highlight for changed lines
-- "Different" DDLPanel now shows side-by-side line-level diff: blue highlights in source panel, orange in target panel
+### src/actions/copyTablesActions.ts
+- `repair_sequence`, `vacuum_table`, `truncate_table`, `drop_table`, `backup_tables` now accept a `label` param and include it in their log messages; `compare_tables` now accepts `sourceLabel`/`targetLabel` and threads them into every inner fetch call and into `compareDDLsFromUrls`.
 
-## scripts/schema.sql (cross-project)
-- Moved `schema.sql` from `lib/` → `scripts/` in infostore, next-bridge, next-chess-analysis, next-bridgeschool, nextjs-shared
-- Moved `schema.sql` from `src/` → `scripts/` in next-bridgeschool and nextjs-shared
-- Added `## Schema file` section to all seven project CLAUDE.md files (including next-dbadmin, next-bridge, nextjs-chess)
-- Updated next-dbadmin CLAUDE.md: SchemaSyncConn description, added Schema file section
-- Updated next-chess-analysis CHANGES.md: old `lib/schema.sql` heading corrected to `scripts/schema.sql`
+### src/components/CopyTableConn.tsx, SchemaSyncConn.tsx, CreateSQLConn.tsx, src/app/api/schema-compare/route.ts
+- Updated every call site to pass `caller` and the relevant connection `label`(s) through to the action functions above.
 
-## src/actions/schemaSyncActions.ts
-- `parsePgDumpByTable`: strip trailing comment-only and blank lines from each block's SQL so the pg_dump footer (`-- PostgreSQL database dump complete --`) no longer leaks into the last table's DDL
-- `regenerateSchemaFile`: write each table with a `-- Name: <table>; Type: TABLE;` header so `parsePgDumpByTable` can re-parse the file on subsequent compare runs
+### src/components/LoggingConn.tsx (new), DatabaseToolsConn.tsx
+- New "Logging" tab showing `nextjs-shared`'s `OwnerTableLogging` (paginated `xlg_logging` viewer). Initially added a custom `truncate_logging` server action + duplicate Truncate button, but `OwnerTableLogging` already ships its own "Truncate Logging" button (`action_truncateLogging`) — removed the redundant `src/actions/loggingActions.ts` and custom button; `LoggingConn` is now a thin wrapper.
 
-## src/components/SchemaSyncConn.tsx
-- Renamed "Schema file" radio label to `scripts/schema.sql`
-- Moved "Overwrite schema.sql" button from action row to inline next to the `scripts/schema.sql` radio (only visible in file mode)
-- Fixed stale error message: "Regenerate" → "Overwrite schema.sql"
-- Fixed LCS backtracking: only treat a line as a match when both `dp[i-1][j] < dp[i][j]` and `dp[i][j-1] < dp[i][j]` — prevents the wrong `);` occurrence from being matched and shifting diff highlighting by one line
+### ~/.claude/settings.json (global, outside this project)
+- Widened the `npx tsc --noEmit` allow rule to a prefix wildcard (`npx tsc --noEmit*`) for both Bash and PowerShell, so variant invocations with extra flags don't fall through to the broader `ask` rule for `npx *`.
 
-## src/components/CreateSQLConn.tsx
-- Changed button label to just `Generate`
+## 2026-07-11 — Fix regression: forcing ssl on every connection broke local (no-SSL) Postgres
 
-## src/actions/schemaSyncActions.ts
-- `execPgDump`: added `--schema=public` to exclude Neon's `neon_auth` schema from all dumps
-- `compareDDLWithFile`: added `filePath` to return type so the client can show the exact path in error messages
-- `regenerateSchemaFile`: removed `mkdir` — if `scripts/schema.sql` doesn't exist, returns `File not found: <path>`; never creates directories
+### src/lib/dbArbitrary.ts
+- Regression introduced by the earlier Aiven SSL fix: unconditionally passing `ssl: { rejectUnauthorized: false }` makes `pg` require SSL, and `client.connect()` throws `"The server does not support SSL connections"` when the target server has no SSL at all (the local Postgres case) — it does not fall back to plaintext the way omitting `ssl` entirely does. This silently zeroed out every source-side (local) count/size/sequence value while target (Aiven) started working, exactly inverting the original bug.
+- Added `resolveSsl()`: returns `false` when the connection string's `sslmode` is absent or `disable` (local), and `{ rejectUnauthorized: false }` otherwise (Aiven, Neon, etc.). Verified both cases connect successfully with a direct test against the real local and Aiven databases.
+- Confirmed via direct query against `xlg_logging` that the `write_logging` additions from the prior two entries were working correctly throughout — the error trail (`fetchTableCountsFromUrl` etc. logging severity `'E'` for `[chess Local]`) is what pinpointed this regression. No logging bug; the Logging tab had simply been loaded once and not refreshed after the fix was tested.
 
-## src/actions/schemaUtils.ts
-- `normalize` in `diffDDLMaps`: filters out `START WITH \d+` lines so sequence start values don't cause false-positive "Different" results
+### src/types/connections.ts, src/app/page.tsx, src/components/ConnectionPicker.tsx
+- Added optional `location` field to `Connection`/`ConnectionEntry`, flattened through from `connections.json` in `page.tsx`, and displayed as small muted text next to the existing colour dot in `ConnectionPicker` — the one shared component used by Copy Tables, Schema Sync, Create SQL, and Backup, so it surfaces everywhere at once.
 
-## src/components/SchemaSyncConn.tsx
-- Added `ApplySQLPanel` component: shows SQL to apply to target
-- Added `applyMaxId` state; `handleSelectTable` fetches `MAX(pk)` from target via `fetchTablePKMaxFromUrl` when a "different" table is selected in DB mode
-- `DDLPanel`: shows `ApplySQLPanel` for `only_in_source` (full CREATE TABLE DDL, new table) and `different` (ALTER TABLE statements only) in DB mode
-- Added `parseColumnLine`, `parseCreateTableColumns`, `generateApplyStatements`: for "different" tables, generates ALTER TABLE statements for column nullability, type, default, new columns, named constraint removal, and source-only IDENTITY/constraint blocks — no CREATE TABLE in output
+## 2026-07-11 — Fix Logging tab showing stale data on revisit
 
-## connections.json
-- Renamed key `next-chess` → `nextjs-chess` to match actual project directory
-
-## src/components/DatabaseToolsConn.tsx
-- Reordered tabs to: Create SQL, Schema Sync, Copy Tables, Backup
-- Changed default active tab from `backup` to `createsql`
-
-## src/actions/schemaUtils.ts
-- Added `is_identity` and `identity_generation` to `SchemaRow` type
-- Added `c.is_identity` and `c.identity_generation` to the `fetchSchema` SELECT — both come from `information_schema.columns`
-- Added both fields to the `diffSchemas` comparison so tables with a mismatched identity attribute (e.g. `GENERATED BY DEFAULT AS IDENTITY` in source but plain integer in target) are correctly flagged as `different` instead of `identical`
-
-## src/actions/schemaSyncActions.ts
-- Added `fetchTableMaxIdsFromUrl`: queries the sequence-backed pk column for each table (DISTINCT ON attnum), then runs a UNION ALL MAX query — returns `Record<string, number | null>` (table → max id)
-
-## src/actions/copyTablesActions.ts
-- Extended `TableComparisonRow` with `sourceMaxId` and `targetMaxId` fields
-- Updated `compare_tables` to call `fetchTableMaxIdsFromUrl` for both source and target in the existing `Promise.all`, and map results into each row
-- Added exported `repair_sequence` server action — public wrapper around `repair_sequences`, strips URL params, returns `{ success, message }`
-
-## src/components/CopyTableConn.tsx
-- Imported `repair_sequence`
-- Added `handleFixSeq(url, table)`: calls `repair_sequence`, sets message, then refreshes
-- Per row: computes `sourceSeqBad` and `targetSeqBad` (`nextSeq !== null && maxId !== null && nextSeq <= maxId`)
-- Src Seq / Tgt Seq cells turn red with ⚠ prefix and a "Fix" button when the sequence is behind the max id
+### src/components/DatabaseToolsConn.tsx
+- Tabs stay mounted (just toggled via a `hidden` CSS class) when switching, so `LoggingConn`'s one-time fetch never re-ran on revisit — confirmed `OwnerTableLogging` itself already uses `skipCache: true`, so this wasn't a caching issue.
+- Added a `loggingKey` counter that increments via `useEffect` every time `activeTab` becomes `'logging'`, passed as `key={loggingKey}` on `<LoggingConn>` to force a remount (and re-fetch) on every visit, without changing the always-mounted behavior the other tabs rely on to preserve their state.

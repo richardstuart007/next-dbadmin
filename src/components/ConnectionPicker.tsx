@@ -66,6 +66,9 @@ export default function ConnectionPicker({
           style={{ backgroundColor: selected.colour }}
         />
       )}
+      {selected?.location && (
+        <span className='text-xs text-gray-500 whitespace-nowrap'>{selected.location}</span>
+      )}
     </div>
   )
 }

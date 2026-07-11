@@ -2,6 +2,7 @@
 
 import { execSync } from 'child_process'
 import { readFile, writeFile, access } from 'fs/promises'
+import { write_logging } from 'nextjs-shared/write_logging'
 import { createArbitraryDb } from '@/src/lib/dbArbitrary'
 import { schemaFilePath } from '@/src/lib/schemaPaths'
 import { fetchSchema, diffSchemas, diffDDLMaps } from '@/src/actions/schemaUtils'
@@ -91,7 +92,7 @@ function parsePgDumpByTable(raw: string): TableDDL[] {
 //  fetchTableMaxIdsFromUrl — get MAX(pk_col) per table for tables that have a sequence
 //  Returns table_name → max id. Tables with no sequence or no rows are omitted. Returns {} on error.
 //----------------------------------------------------------------------------------
-export async function fetchTableMaxIdsFromUrl(url: string, tables: string[]): Promise<Record<string, number | null>> {
+export async function fetchTableMaxIdsFromUrl(url: string, tables: string[], caller = '', label = ''): Promise<Record<string, number | null>> {
   if (tables.length === 0) return {}
   if (!url) return {}
   const db = createArbitraryDb(url)
@@ -117,7 +118,10 @@ export async function fetchTableMaxIdsFromUrl(url: string, tables: string[]): Pr
       `,
       params: [tables],
     })
-    if (colResult.rows.length === 0) return {}
+    if (colResult.rows.length === 0) {
+      await write_logging({ lg_functionname: 'fetchTableMaxIdsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — no identity columns found`, lg_severity: 'I' })
+      return {}
+    }
     const unions = colResult.rows
       .map((r: { table_name: string; col_name: string }) =>
         `SELECT '${r.table_name}'::text AS t, MAX("${r.col_name}") AS m FROM public."${r.table_name}"`
@@ -129,8 +133,10 @@ export async function fetchTableMaxIdsFromUrl(url: string, tables: string[]): Pr
       maxIds[row.t] = row.m !== null ? parseInt(row.m, 10) : null
     }
     const result = maxIds
+    await write_logging({ lg_functionname: 'fetchTableMaxIdsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — fetched max ids for ${Object.keys(result).length}/${tables.length}`, lg_severity: 'I' })
     return result
-  } catch {
+  } catch (error) {
+    await write_logging({ lg_functionname: 'fetchTableMaxIdsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — failed to fetch max ids: ` + (error as Error).message, lg_severity: 'E' })
     return {}
   }
 }
@@ -139,7 +145,7 @@ export async function fetchTableMaxIdsFromUrl(url: string, tables: string[]): Pr
 //  fetchTableSequencesFromUrl — get next sequence value per table for given tables
 //  Returns table_name → next value. Tables with no sequence are omitted. Returns {} on error.
 //----------------------------------------------------------------------------------
-export async function fetchTableSequencesFromUrl(url: string, tables: string[]): Promise<Record<string, number | null>> {
+export async function fetchTableSequencesFromUrl(url: string, tables: string[], caller = '', label = ''): Promise<Record<string, number | null>> {
   if (tables.length === 0) return {}
   if (!url) return {}
   const db = createArbitraryDb(url)
@@ -172,8 +178,10 @@ export async function fetchTableSequencesFromUrl(url: string, tables: string[]):
     const seqs: Record<string, number | null> = {}
     for (const row of result.rows) seqs[row.table_name] = parseInt(row.next_value, 10)
     const result2 = seqs
+    await write_logging({ lg_functionname: 'fetchTableSequencesFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — fetched sequences for ${Object.keys(result2).length}/${tables.length}`, lg_severity: 'I' })
     return result2
-  } catch {
+  } catch (error) {
+    await write_logging({ lg_functionname: 'fetchTableSequencesFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — failed to fetch sequences: ` + (error as Error).message, lg_severity: 'E' })
     return {}
   }
 }
@@ -182,7 +190,7 @@ export async function fetchTableSequencesFromUrl(url: string, tables: string[]):
 //  fetchTablePKMaxFromUrl — get MAX(pk_col) for a single table by looking up its
 //  primary key column first. Works whether or not the column has an identity sequence.
 //----------------------------------------------------------------------------------
-export async function fetchTablePKMaxFromUrl(url: string, tableName: string): Promise<number | null> {
+export async function fetchTablePKMaxFromUrl(url: string, tableName: string, caller = '', label = ''): Promise<number | null> {
   if (!url || !tableName) return null
   const db = createArbitraryDb(url)
   try {
@@ -200,13 +208,18 @@ export async function fetchTablePKMaxFromUrl(url: string, tableName: string): Pr
       `,
       params: [tableName],
     })
-    if (pkResult.rows.length === 0) return null
+    if (pkResult.rows.length === 0) {
+      await write_logging({ lg_functionname: 'fetchTablePKMaxFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] table=${tableName} — no primary key found`, lg_severity: 'I' })
+      return null
+    }
     const pkCol     = pkResult.rows[0].column_name as string
     const maxResult = await db.query({ query: `SELECT MAX("${pkCol}") AS m FROM public."${tableName}"` })
     const m         = maxResult.rows[0]?.m
     const result    = m !== null && m !== undefined ? parseInt(m, 10) : null
+    await write_logging({ lg_functionname: 'fetchTablePKMaxFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] table=${tableName} — max ${pkCol} = ${result}`, lg_severity: 'I' })
     return result
-  } catch {
+  } catch (error) {
+    await write_logging({ lg_functionname: 'fetchTablePKMaxFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] table=${tableName} — failed to fetch max PK: ` + (error as Error).message, lg_severity: 'E' })
     return null
   }
 }
@@ -216,7 +229,7 @@ export async function fetchTablePKMaxFromUrl(url: string, tableName: string): Pr
 //  Uses createArbitraryDb so no env file is needed — URL is passed directly.
 //  Tables that do not exist are omitted from the result. Returns {} on any error.
 //----------------------------------------------------------------------------------
-export async function fetchTableCountsFromUrl(url: string, tables: string[]): Promise<Record<string, number>> {
+export async function fetchTableCountsFromUrl(url: string, tables: string[], caller = '', label = ''): Promise<Record<string, number>> {
   if (tables.length === 0) return {}
   if (!url) return {}
   const db = createArbitraryDb(url)
@@ -226,13 +239,52 @@ export async function fetchTableCountsFromUrl(url: string, tables: string[]): Pr
       params: [tables],
     })
     const existing: string[] = checkResult.rows.map((r: { table_name: string }) => r.table_name)
-    if (existing.length === 0) return {}
+    if (existing.length === 0) {
+      await write_logging({ lg_functionname: 'fetchTableCountsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — none of the requested tables exist`, lg_severity: 'I' })
+      return {}
+    }
     const unions = existing.map(t => `SELECT '${t}'::text AS t, COUNT(*) AS c FROM public."${t}"`).join(' UNION ALL ')
     const countResult = await db.query({ query: unions })
     const counts: Record<string, number> = {}
     for (const row of countResult.rows) counts[row.t] = parseInt(row.c, 10)
+    await write_logging({ lg_functionname: 'fetchTableCountsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — fetched counts for ${Object.keys(counts).length}/${tables.length}`, lg_severity: 'I' })
     return counts
-  } catch {
+  } catch (error) {
+    await write_logging({ lg_functionname: 'fetchTableCountsFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — failed to fetch counts: ` + (error as Error).message, lg_severity: 'E' })
+    return {}
+  }
+}
+
+//----------------------------------------------------------------------------------
+//  fetchTableSizesFromUrl — total size (table + indexes + TOAST) per table, in whole MB.
+//  Any non-zero size rounds up to at least 1 MB so small tables don't display as 0.
+//  Uses createArbitraryDb so no env file is needed — URL is passed directly.
+//  Tables that do not exist are omitted from the result. Returns {} on any error.
+//----------------------------------------------------------------------------------
+export async function fetchTableSizesFromUrl(url: string, tables: string[], caller = '', label = ''): Promise<Record<string, number>> {
+  if (tables.length === 0) return {}
+  if (!url) return {}
+  const db = createArbitraryDb(url)
+  try {
+    const result = await db.query({
+      query: `
+        SELECT
+          cls.relname AS table_name,
+          GREATEST(1, CEIL(pg_total_relation_size(cls.oid) / 1048576.0)) AS size_mb
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = 'public'
+          AND cls.relkind = 'r'
+          AND cls.relname = ANY($1::text[])
+      `,
+      params: [tables],
+    })
+    const sizes: Record<string, number> = {}
+    for (const row of result.rows) sizes[row.table_name] = parseInt(row.size_mb, 10)
+    await write_logging({ lg_functionname: 'fetchTableSizesFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — fetched sizes for ${Object.keys(sizes).length}/${tables.length}`, lg_severity: 'I' })
+    return sizes
+  } catch (error) {
+    await write_logging({ lg_functionname: 'fetchTableSizesFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${tables.join(', ')} — failed to fetch sizes: ` + (error as Error).message, lg_severity: 'E' })
     return {}
   }
 }
@@ -247,23 +299,32 @@ export async function compareSchemasFromUrls({
   label1,
   label2,
   excludePrefixes,
+  caller = '',
 }: {
   url1: string
   url2: string
   label1: string
   label2: string
   excludePrefixes?: string
+  caller?: string
 }): Promise<SchemaCompareResult> {
-  const db1 = createArbitraryDb(url1)
-  const db2 = createArbitraryDb(url2)
-  const [rows1, rows2] = await Promise.all([fetchSchema(db1), fetchSchema(db2)])
-  const prefixes = (excludePrefixes ?? '').split(',').map(p => p.trim()).filter(Boolean)
-  function filter<T extends { table_name: string }>(rows: T[]): T[] {
-    return prefixes.length ? rows.filter(r => !prefixes.some(p => r.table_name.startsWith(p))) : rows
+  try {
+    const db1 = createArbitraryDb(url1)
+    const db2 = createArbitraryDb(url2)
+    const [rows1, rows2] = await Promise.all([fetchSchema(db1), fetchSchema(db2)])
+    const prefixes = (excludePrefixes ?? '').split(',').map(p => p.trim()).filter(Boolean)
+    function filter<T extends { table_name: string }>(rows: T[]): T[] {
+      return prefixes.length ? rows.filter(r => !prefixes.some(p => r.table_name.startsWith(p))) : rows
+    }
+    const filtered1 = filter(rows1)
+    const diff = diffSchemas(filtered1, filter(rows2), label1, label2)
+    const result = { label1, label2, schema1: filtered1, ...diff }
+    await write_logging({ lg_functionname: 'compareSchemasFromUrls', lg_caller: caller, lg_msg: `[${label1 || 'source'} vs ${label2 || 'target'}] tables=${filtered1.map(r => r.table_name).join(', ')} — compared ${filtered1.length} table(s)`, lg_severity: 'I' })
+    return result
+  } catch (error) {
+    await write_logging({ lg_functionname: 'compareSchemasFromUrls', lg_caller: caller, lg_msg: 'Failed to compare schemas: ' + (error as Error).message, lg_severity: 'E' })
+    throw error
   }
-  const filtered1 = filter(rows1)
-  const diff = diffSchemas(filtered1, filter(rows2), label1, label2)
-  return { label1, label2, schema1: filtered1, ...diff }
 }
 
 //----------------------------------------------------------------------------------
@@ -275,16 +336,18 @@ export async function compareDDLsFromUrls({
   label1,
   label2,
   excludePrefixes,
+  caller = '',
 }: {
   url1:             string
   url2:             string
   label1:           string
   label2:           string
   excludePrefixes?: string
+  caller?:          string
 }): Promise<DDLCompareResult> {
   const [src, tgt] = await Promise.all([
-    generateCreateSQLFromUrl(url1).catch((): TableDDL[] => []),
-    generateCreateSQLFromUrl(url2).catch((): TableDDL[] => []),
+    generateCreateSQLFromUrl(url1, caller, label1).catch((): TableDDL[] => []),
+    generateCreateSQLFromUrl(url2, caller, label2).catch((): TableDDL[] => []),
   ])
   const prefixes = (excludePrefixes ?? '').split(',').map(p => p.trim()).filter(Boolean)
   function filterTables(tables: TableDDL[]): TableDDL[] {
@@ -295,6 +358,7 @@ export async function compareDDLsFromUrls({
   const srcMap = new Map(filterTables(src).map(t => [t.table_name, t.sql]))
   const tgtMap = new Map(filterTables(tgt).map(t => [t.table_name, t.sql]))
   const result = diffDDLMaps(srcMap, tgtMap, label1, label2)
+  await write_logging({ lg_functionname: 'compareDDLsFromUrls', lg_caller: caller, lg_msg: `[${label1 || 'source'} vs ${label2 || 'target'}] tables=${result.rows.map(r => r.table_name).join(', ')} — compared ${result.rows.length} table(s)`, lg_severity: 'I' })
   return result
 }
 
@@ -318,23 +382,28 @@ async function readSchemaFile(projectKey: string): Promise<TableDDL[]> {
 //----------------------------------------------------------------------------------
 export async function regenerateSchemaFile(
   url:        string,
-  projectKey: string
+  projectKey: string,
+  caller:     string = '',
+  label:      string = ''
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const tables   = await generateCreateSQLFromUrl(url)
+    const tables   = await generateCreateSQLFromUrl(url, caller, label)
     const content  = tables.map(t => `-- Name: ${t.table_name}; Type: TABLE;\n--\n\n${t.sql}`).join('\n\n--\n') + '\n'
     const filePath = schemaFilePath(projectKey)
     try {
       await access(filePath)
     } catch {
       const result = { success: false, message: `File not found: ${filePath}` }
+      await write_logging({ lg_functionname: 'regenerateSchemaFile', lg_caller: caller, lg_msg: `[${label || 'source'}] ${result.message}`, lg_severity: 'E' })
       return result
     }
     await writeFile(filePath, content, 'utf8')
     const result = { success: true, message: `Wrote ${tables.length} tables to scripts/schema.sql` }
+    await write_logging({ lg_functionname: 'regenerateSchemaFile', lg_caller: caller, lg_msg: `[${label || 'source'}] tables=${tables.map(t => t.table_name).join(', ')} — ${result.message}`, lg_severity: 'I' })
     return result
   } catch (e) {
     const result = { success: false, message: (e as Error).message }
+    await write_logging({ lg_functionname: 'regenerateSchemaFile', lg_caller: caller, lg_msg: `[${label || 'source'}] failed to regenerate schema file: ` + result.message, lg_severity: 'E' })
     return result
   }
 }
@@ -349,15 +418,17 @@ export async function compareDDLWithFile({
   projectKey,
   label1,
   excludePrefixes,
+  caller = '',
 }: {
   url:              string
   projectKey:       string
   label1:           string
   excludePrefixes?: string
+  caller?:          string
 }): Promise<DDLCompareResult & { fileExists: boolean; filePath: string }> {
   const filePath   = schemaFilePath(projectKey)
   const [dbDDL, fileDDL] = await Promise.all([
-    generateCreateSQLFromUrl(url).catch((): TableDDL[] => []),
+    generateCreateSQLFromUrl(url, caller, label1).catch((): TableDDL[] => []),
     readSchemaFile(projectKey),
   ])
   const fileExists = fileDDL.length > 0
@@ -371,6 +442,14 @@ export async function compareDDLWithFile({
   const fileMap = new Map(filterTables(fileDDL).map(t => [t.table_name, t.sql]))
   const r       = diffDDLMaps(srcMap, fileMap, label1, 'schema.sql')
   const result  = { ...r, fileExists, filePath }
+  await write_logging({
+    lg_functionname: 'compareDDLWithFile',
+    lg_caller:       caller,
+    lg_msg:          fileExists
+      ? `[${label1 || 'source'} vs schema.sql] tables=${r.rows.map(row => row.table_name).join(', ')} — compared ${r.rows.length} table(s)`
+      : `[${label1 || 'source'}] schema.sql not found or empty: ${filePath}`,
+    lg_severity:     fileExists ? 'I' : 'W',
+  })
   return result
 }
 
@@ -378,26 +457,33 @@ export async function compareDDLWithFile({
 //  generateCreateSQLFromUrl — run pg_dump --schema-only against a database URL
 //  Returns per-table CREATE TABLE + index DDL. No env file needed — URL direct.
 //----------------------------------------------------------------------------------
-export async function generateCreateSQLFromUrl(url: string): Promise<TableDDL[]> {
+export async function generateCreateSQLFromUrl(url: string, caller = '', label = ''): Promise<TableDDL[]> {
   if (!url) throw new Error('URL is required')
   const cleanUrl = url.replace(/[&?]timezone=[^&]*/g, '')
   let raw: string
   try {
     raw = execPgDump(`--schema-only --no-owner --no-acl --schema=public "${cleanUrl}"`)
   } catch (e) {
-    throw new Error(`pg_dump failed: ${(e as Error).message}`)
+    const msg = `[${label || 'env'}] pg_dump failed: ${(e as Error).message}`
+    await write_logging({ lg_functionname: 'generateCreateSQLFromUrl', lg_caller: caller, lg_msg: msg, lg_severity: 'E' })
+    throw new Error(msg)
   }
-  if (!raw.trim()) throw new Error('pg_dump returned empty output')
+  if (!raw.trim()) {
+    const msg = `[${label || 'env'}] pg_dump returned empty output`
+    await write_logging({ lg_functionname: 'generateCreateSQLFromUrl', lg_caller: caller, lg_msg: msg, lg_severity: 'E' })
+    throw new Error(msg)
+  }
   //
   //  pg_dump on local PostgreSQL emits \unrestrict lines that confuse the parser — strip them
   //
   raw = raw.split('\n').filter(line => !line.startsWith('\\unrestrict ')).join('\n')
   const result = parsePgDumpByTable(raw)
   if (result.length === 0) {
-    throw new Error(
-      `pg_dump ran (${raw.length} chars) but no tables were parsed. ` +
+    const msg = `[${label || 'env'}] pg_dump ran (${raw.length} chars) but no tables were parsed. ` +
       `First 300 chars: ${raw.slice(0, 300).replace(/\n/g, '↵')}`
-    )
+    await write_logging({ lg_functionname: 'generateCreateSQLFromUrl', lg_caller: caller, lg_msg: msg, lg_severity: 'E' })
+    throw new Error(msg)
   }
+  await write_logging({ lg_functionname: 'generateCreateSQLFromUrl', lg_caller: caller, lg_msg: `[${label || 'env'}] tables=${result.map(t => t.table_name).join(', ')} — parsed DDL for ${result.length} table(s)`, lg_severity: 'I' })
   return result
 }

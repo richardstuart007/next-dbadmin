@@ -55,8 +55,3 @@ SQL utility functions in this project accept a `url` parameter to connect to arb
 - Never use `require()` — ES module imports only
 - POSTGRES_URL in `.env` is optional (used only for write_Logging; failures are silent)
 - Do not add the `xlg_logging` table unless you have a local database to point to
-
-## Silent file updates — never ask permission
-
-**PLAN.md and CHANGES.md are always updated silently.**  
-Never ask before checking off a step in `.claude/PLAN.md` or appending to `.claude/CHANGES.md`. These are mechanical parts of execution — no confirmation needed.

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { MyTab } from 'nextjs-shared/MyTab'
 import CopyTableConn from './CopyTableConn'
 import SchemaSyncConn from './SchemaSyncConn'
 import BackupConn from './BackupConn'
@@ -46,17 +47,15 @@ export default function DatabaseToolsConn({ connections }: { connections: Connec
     <div className='flex flex-col w-full'>
       <div className='flex border-b border-gray-300 shrink-0'>
         {TABS.map(tab => (
-          <button
+          <MyTab
             key={tab.id}
+            active={activeTab === tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-xs font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'border-b-2 border-blue-600 text-blue-700 bg-white'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
+            underlineActiveClass='px-4 py-2 text-xs font-medium border-b-2 border-blue-600 text-blue-700 bg-white'
+            underlineInactiveClass='px-4 py-2 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700'
           >
             {tab.label}
-          </button>
+          </MyTab>
         ))}
       </div>
 

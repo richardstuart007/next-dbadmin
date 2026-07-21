@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { MyButton } from 'nextjs-shared/MyButton'
 import { MyInput } from 'nextjs-shared/MyInput'
+import MySelectMulti from 'nextjs-shared/MySelectMulti'
 import { MyHelp } from 'nextjs-shared/MyHelp'
 import type { HelpItem } from 'nextjs-shared/MyHelp'
 import {
@@ -618,24 +619,12 @@ function TableSummarySection({
   selectedTable: string
   onSelectTable: (table: string) => void
 }) {
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
 
   if (rows.length === 0) return null
 
-  const isAll        = selectedStatuses.size === 0
-  const filteredRows = isAll ? rows : rows.filter(r => selectedStatuses.has(r.status))
-
-  //----------------------------------------------------------------------------------------------
-  //  toggleStatus — status filter checkbox state
-  //----------------------------------------------------------------------------------------------
-  function toggleStatus(value: string) {
-    setSelectedStatuses(prev => {
-      const next = new Set(prev)
-      if (next.has(value)) next.delete(value)
-      else next.add(value)
-      return next
-    })
-  }
+  const isAll        = selectedStatuses.length === 0
+  const filteredRows = isAll ? rows : rows.filter(r => selectedStatuses.includes(r.status))
 
   return (
     <div className='border rounded bg-white w-fit'>
@@ -644,27 +633,15 @@ function TableSummarySection({
           <tr>
             <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Table</th>
             <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>
-              <details className='relative'>
-                <summary className='cursor-pointer list-none font-medium text-gray-500 hover:text-gray-700'>
-                  {isAll ? 'Status ▾' : `Status (${selectedStatuses.size}/${STATUS_FILTER_OPTIONS.length}) ▾`}
-                </summary>
-                <div className='absolute z-20 bg-white border border-gray-200 rounded shadow-md p-2 space-y-1 min-w-28'>
-                  <label className='flex items-center gap-1 cursor-pointer whitespace-nowrap border-b border-gray-100 pb-1 mb-1'>
-                    <input type='checkbox' checked={isAll} onChange={() => setSelectedStatuses(new Set())} />
-                    <span className='text-xs font-semibold'>All</span>
-                  </label>
-                  {STATUS_FILTER_OPTIONS.map(o => (
-                    <label key={o.value} className='flex items-center gap-1 cursor-pointer whitespace-nowrap'>
-                      <input
-                        type='checkbox'
-                        checked={!isAll && selectedStatuses.has(o.value)}
-                        onChange={() => toggleStatus(o.value)}
-                      />
-                      <span className='text-xs'>{o.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </details>
+              <MySelectMulti
+                label='Status'
+                options={STATUS_FILTER_OPTIONS}
+                selected={selectedStatuses}
+                onChange={setSelectedStatuses}
+                showReset
+                resetLabel='All'
+                overrideClass='w-28 md:w-28 h-6 md:h-6'
+              />
             </th>
             {showCounts && <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>{label1}</th>}
             {showCounts && <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>{label2}</th>}

@@ -7,12 +7,6 @@ Local-only database admin tool. Never deployed.
 Copy tables between databases and compare schemas across projects.
 All DB connections are defined in `connections.json` in the project root (gitignored).
 
-## nextjs-shared reference
-
-Read `node_modules/nextjs-shared/CONSUMING_PROJECTS.md` before implementing
-any feature from nextjs-shared. It contains all component APIs, database
-function signatures, coding conventions, and setup instructions.
-
 ## connections.json
 
 Flat list of named connections — one entry per database environment:
@@ -44,14 +38,7 @@ Flat list of named connections — one entry per database environment:
 
 SQL utility functions in this project accept a `url` parameter to connect to arbitrary databases. This makes them **ineligible for `nextjs-shared`** — shared database functions use the project's configured connection, not a caller-supplied URL. Never propose moving a URL-accepting database function to `nextjs-shared`.
 
-## Schema file
-
-`scripts/schema.sql` is the single source of truth for the database structure. Every new table and index must be added here.
-
 ## Key conventions
 
-- Always use `function` declarations, never arrow functions for named functions
-- `'use client'` or `'use server'` must be the very first line
-- Never use `require()` — ES module imports only
 - POSTGRES_URL in `.env` is optional (used only for write_Logging; failures are silent)
 - Do not add the `xlg_logging` table unless you have a local database to point to

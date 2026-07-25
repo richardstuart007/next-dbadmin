@@ -512,9 +512,9 @@ export default function CopyTableConn({ connections }: { connections: Connection
           {/* Comparison table */}
           <div className='border rounded bg-white w-fit'>
             <table className='text-xs'>
-              <thead className='bg-gray-50 sticky top-0'>
+              <thead className='sticky top-0'>
                 <tr>
-                  <th className='px-2 py-1 border-b'>
+                  <th className='px-2 py-1 border-b bg-gray-50'>
                     <input
                       type='checkbox'
                       checked={allSelected}
@@ -522,8 +522,8 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       disabled={selectableRows.length === 0}
                     />
                   </th>
-                  <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Table</th>
-                  <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>
+                  <th className='px-2 py-1 text-left text-gray-500 font-medium border-b bg-gray-50'>Table</th>
+                  <th className='px-2 py-1 text-left text-gray-500 font-medium border-b bg-gray-50'>
                     <MySelectMulti
                       label='Status'
                       options={STATUS_FILTER_OPTIONS}
@@ -534,16 +534,16 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       overrideClass='w-28 md:w-28 h-6 md:h-6'
                     />
                   </th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>Src Size</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>
                     {sourceConn?.label ?? 'Source'}
                   </th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Src Size</th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Src Seq</th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>Src Seq</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>Tgt Size</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>
                     {targetConn?.label ?? 'Target'}
                   </th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Tgt Size</th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b'>Tgt Seq</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>Tgt Seq</th>
                   <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Counts</th>
                   <th className='px-2 py-1 text-left text-gray-500 font-medium border-b'>Actions</th>
                 </tr>
@@ -560,7 +560,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                   return (
                     <Fragment key={r.table}>
                     <tr className='border-b border-gray-100'>
-                      <td className='px-2 py-1 text-center'>
+                      <td className='px-2 py-1 text-center bg-gray-50'>
                         {!isTargetOnly && (
                           <input
                             type='checkbox'
@@ -569,7 +569,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           />
                         )}
                       </td>
-                      <td className={`px-2 py-1 font-mono ${r.status === 'identical' ? 'text-gray-500' : 'font-semibold'}`}>
+                      <td className={`px-2 py-1 font-mono bg-gray-50 ${r.status === 'identical' ? 'text-gray-500' : 'font-semibold'}`}>
                         <div className='flex items-center gap-1'>
                           {r.table}
                           {copiedTables.has(r.table) && (
@@ -580,7 +580,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           )}
                         </div>
                       </td>
-                      <td className='px-2 py-1'>
+                      <td className='px-2 py-1 bg-gray-50'>
                         <span
                           className={`px-1 rounded ${statusMeta(r.status).className} ${isDifferent ? 'cursor-pointer underline decoration-dotted' : ''}`}
                           onClick={isDifferent ? () => toggleDiff(r.table) : undefined}
@@ -589,10 +589,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           {statusMeta(r.status).label}
                         </span>
                       </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
-                        {r.sourceCount !== null ? r.sourceCount.toLocaleString() : '—'}
-                      </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-500 bg-blue-50'>
                         <div className='flex items-center justify-end gap-1'>
                           {r.sourceSize !== null ? `${r.sourceSize.toLocaleString()} MB` : '—'}
                           {r.sourceSize !== null && sourceConn?.url && (
@@ -606,7 +603,10 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           )}
                         </div>
                       </td>
-                      <td className={`px-2 py-1 text-right tabular-nums ${sourceSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-600 bg-blue-50'>
+                        {r.sourceCount !== null ? r.sourceCount.toLocaleString() : '—'}
+                      </td>
+                      <td className={`px-2 py-1 text-right tabular-nums ${sourceSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500 bg-blue-50'}`}>
                         <div className='flex items-center justify-end gap-1'>
                           {sourceSeqBad && <span title={`Sequence (${r.sourceNextSeq?.toLocaleString()}) ≤ max id (${r.sourceMaxId?.toLocaleString()})`}>⚠</span>}
                           {r.sourceNextSeq !== null ? r.sourceNextSeq.toLocaleString() : '—'}
@@ -621,10 +621,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           )}
                         </div>
                       </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-600'>
-                        {r.targetCount !== null ? r.targetCount.toLocaleString() : '—'}
-                      </td>
-                      <td className='px-2 py-1 text-right tabular-nums text-gray-500'>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-500 bg-orange-50'>
                         <div className='flex items-center justify-end gap-1'>
                           {r.targetSize !== null ? `${r.targetSize.toLocaleString()} MB` : '—'}
                           {r.targetSize !== null && targetConn?.url && (
@@ -638,7 +635,10 @@ export default function CopyTableConn({ connections }: { connections: Connection
                           )}
                         </div>
                       </td>
-                      <td className={`px-2 py-1 text-right tabular-nums ${targetSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500'}`}>
+                      <td className='px-2 py-1 text-right tabular-nums text-gray-600 bg-orange-50'>
+                        {r.targetCount !== null ? r.targetCount.toLocaleString() : '—'}
+                      </td>
+                      <td className={`px-2 py-1 text-right tabular-nums ${targetSeqBad ? 'bg-red-50 text-red-700 font-semibold' : 'text-gray-500 bg-orange-50'}`}>
                         <div className='flex items-center justify-end gap-1'>
                           {targetSeqBad && <span title={`Sequence (${r.targetNextSeq?.toLocaleString()}) ≤ max id (${r.targetMaxId?.toLocaleString()})`}>⚠</span>}
                           {r.targetNextSeq !== null ? r.targetNextSeq.toLocaleString() : '—'}
@@ -707,11 +707,11 @@ export default function CopyTableConn({ connections }: { connections: Connection
                   <td className='px-2 py-1' />
                   <td className='px-2 py-1'>Total</td>
                   <td className='px-2 py-1' />
-                  <td className='px-2 py-1' />
                   <td className='px-2 py-1 text-right tabular-nums'>{totalSourceSize.toLocaleString()} MB</td>
                   <td className='px-2 py-1' />
                   <td className='px-2 py-1' />
                   <td className='px-2 py-1 text-right tabular-nums'>{totalTargetSize.toLocaleString()} MB</td>
+                  <td className='px-2 py-1' />
                   <td className='px-2 py-1' />
                   <td className='px-2 py-1' />
                   <td className='px-2 py-1' />

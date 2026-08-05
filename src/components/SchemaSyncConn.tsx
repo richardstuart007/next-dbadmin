@@ -638,8 +638,6 @@ function TableSummarySection({
                 options={STATUS_FILTER_OPTIONS}
                 selected={selectedStatuses}
                 onChange={setSelectedStatuses}
-                showReset
-                resetLabel='All'
                 overrideClass='w-28 md:w-28 h-6 md:h-6'
               />
             </th>

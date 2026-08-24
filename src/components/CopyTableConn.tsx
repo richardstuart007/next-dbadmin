@@ -532,12 +532,12 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       overrideClass='w-28 md:w-28 h-6 md:h-6'
                     />
                   </th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>Src Size</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>Src Size(Mb)</th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>
                     {sourceConn?.label ?? 'Source'}
                   </th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-blue-50'>Src Seq</th>
-                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>Tgt Size</th>
+                  <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>Tgt Size(Mb)</th>
                   <th className='px-2 py-1 text-right text-gray-500 font-medium border-b bg-orange-50'>
                     {targetConn?.label ?? 'Target'}
                   </th>
@@ -589,7 +589,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       </td>
                       <td className='px-2 py-1 text-right tabular-nums text-gray-500 bg-blue-50'>
                         <div className='flex items-center justify-end gap-1'>
-                          {r.sourceSize !== null ? `${r.sourceSize.toLocaleString()} MB` : '—'}
+                          {r.sourceSize !== null ? r.sourceSize.toLocaleString() : '—'}
                           {r.sourceSize !== null && sourceConn?.url && (
                             <MyButton
                               onClick={() => handleVacuum(sourceConn.url!, r.table, 'src')}
@@ -621,7 +621,7 @@ export default function CopyTableConn({ connections }: { connections: Connection
                       </td>
                       <td className='px-2 py-1 text-right tabular-nums text-gray-500 bg-orange-50'>
                         <div className='flex items-center justify-end gap-1'>
-                          {r.targetSize !== null ? `${r.targetSize.toLocaleString()} MB` : '—'}
+                          {r.targetSize !== null ? r.targetSize.toLocaleString() : '—'}
                           {r.targetSize !== null && targetConn?.url && (
                             <MyButton
                               onClick={() => handleVacuum(targetConn.url!, r.table, 'tgt')}
